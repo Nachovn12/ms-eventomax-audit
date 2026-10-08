@@ -1,21 +1,16 @@
 spring:
-  datasource:
-    url: jdbc:h2:mem:auditdb
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
-
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
-
-  flyway:
-    enabled: false
-
-  kafka:
-    bootstrap-servers: localhost:9092
-    consumer:
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: '*'
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://issuer.invalid/test
+eventomax:
+  security:
+    jwt:
+      audience: audit-test
+logging:
+  level:
+    org.apache.kafka: WARN
+    kafka: WARN
+    state.change.logger: WARN
+    org.springframework.kafka: WARN

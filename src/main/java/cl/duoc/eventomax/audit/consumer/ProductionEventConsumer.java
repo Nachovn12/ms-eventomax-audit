@@ -12,8 +12,10 @@ import org.springframework.kafka.retrytopic.DltStrategy;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 @Component
+@ConditionalOnProperty(name = "eventomax.audit.kafka.enabled", havingValue = "true")
 public class ProductionEventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(ProductionEventConsumer.class);
@@ -26,12 +28,21 @@ public class ProductionEventConsumer {
 
     @RetryableTopic(
             attempts = "3",
+            kafkaTemplate = "auditRetryKafkaTemplate",
+            retryTopicSuffix = "-audit-retry",
+            dltTopicSuffix = "-audit-dlt",
             dltStrategy = DltStrategy.FAIL_ON_ERROR,
-            autoCreateTopics = "false"
+            autoCreateTopics = "${eventomax.audit.kafka.auto-create-topics:false}",
+            autoStartDltHandler = "false"
     )
-    @KafkaListener(topics = "productions.events", groupId = "audit-group")
+    @KafkaListener(topics = "${eventomax.audit.kafka.topic}", groupId = "${eventomax.audit.kafka.group-id}")
     public void consume(ProductionEventMessage message, @Header(KafkaHeaders.RECEIVED_TOPIC) String topic) {
-        log.info("Received event {} from topic {}", message.getEventId(), topic);
+        if (message == null || message.getEventId() == null || message.getEventId().isBlank()
+                || message.getActor() == null || message.getActor().isBlank()
+                || message.getType() == null || message.getType().isBlank() || message.getTimestamp() == null) {
+            throw new IllegalArgumentException("Audit event requires eventId, actor, type and timestamp");
+        }
+        log.debug("Received audit event from topic {}", topic);
         
         AuditEvent event = new AuditEvent();
         event.setEventId(message.getEventId());
