@@ -23,7 +23,7 @@ Para levantar en producción, definir:
   * Tópico Principal: `productions.events`
   * Tópico de Reintentos: `productions.events-audit-retry`
   * Tópico DLT (Dead Letters): `productions.events-audit-dlt`
-  _Nota: Como `autoCreateTopics=false`, la infraestructura debe aprovisionar estos tópicos previamente (sugerido: factor de replicación 3, al menos 3 particiones)._
+  _Nota: Como `autoCreateTopics=false`, la infraestructura debe aprovisionar estos tópicos previamente. El factor de replicación debe ajustarse a la cantidad real de brokers disponibles (no exigir factor 3 sobre un clúster de un solo broker). `AUDIT_KAFKA_ENABLED=false` continúa siendo el valor predeterminado._
 
 ## Procedimientos de Operación
 
@@ -39,7 +39,7 @@ docker-compose -f docker-compose.prod.yml up -d
 Garantiza un usuario no-root en un entorno multistage.
 
 ### Healthchecks
-El contenedor docker incluye un healthcheck HTTP validando `/actuator/health`. Fallos allí provocarán reinicios (`restart: always`).
+El contenedor utiliza un healthcheck HTTP sobre `/actuator/health`. El estado `unhealthy` permite detectar problemas operativos, pero Docker Compose no reinicia automáticamente un contenedor únicamente por ese estado. La política `restart: always` actúa ante la terminación del proceso o del contenedor. La detección, alerta y recuperación de instancias `unhealthy` debe definirse explícitamente en la operación de infraestructura.
 
 ### Diagnóstico de Incidentes y Logs
 Los logs se emiten en formato estándar (stdout). Las excepciones en la API (ej. parámetros inválidos) se capturan globalmente devolviendo JSON estandarizado, sin stacktraces (400, 401, 403).
