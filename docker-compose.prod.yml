@@ -12,6 +12,7 @@ services:
       AUDIT_KAFKA_ENABLED: ${AUDIT_KAFKA_ENABLED:-false}
       ENTRA_ISSUER_URI: ${ENTRA_ISSUER_URI:?Set the approved Entra issuer URI}
       ENTRA_AUDIENCE: ${ENTRA_AUDIENCE:?Set the approved API audience}
+      SPRING_PROFILES_ACTIVE: prod
     networks:
       - eventomax-net
 
