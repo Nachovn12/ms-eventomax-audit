@@ -1,16 +1,38 @@
-# Security & Trust Boundary (EMX-122)
+# Seguridad y trust boundary — EMX-122
 
-## Flujo de Seguridad y Autenticación
+## Implementado en Audit
 
-En el contexto actual de la arquitectura integrada (Frontend Angular $\rightarrow$ Microsoft Entra ID $\rightarrow$ AWS API Gateway $\rightarrow$ ms-eventomax-bff $\rightarrow$ ms-eventomax-audit):
+Resource Server JWT con issuer, firma, audiencia, expiración obligatoria y validación
+temporal estándar. GET timeline exige scope access_as_user y rol Admin o Auditor.
+No acepta identidad mediante headers arbitrarios.
+Todas las operaciones de escritura se deniegan. Health es público solo dentro del
+perímetro de red; Swagger/OpenAPI requiere los permisos de lectura.
 
-1. **Ausencia de JWT Directo**: El microservicio `ms-eventomax-audit` **NO** recibe el JWT directamente desde el Gateway/BFF (no se ha configurado un OAuth2 Resource Server interno por diseño de red perimetral).
-2. **Trust Boundary**: La validación del token JWT, la expiración, la firma (Entra ID) y el control de acceso (RBAC) ocurren en la capa del **API Gateway y el BFF**. El perímetro de seguridad termina allí.
-3. **Red Interna**: Este microservicio (`ms-eventomax-audit`) opera exclusivamente dentro de la red privada interna (VPC/Cluster). 
-4. **Roles**: La aplicación consumidora (BFF) asegurará que solo los roles `Admin` y `Auditor` puedan acceder al endpoint `GET /api/audit/timeline`. 
-5. **No Escritura**: El rol `Auditor` solo tiene permisos de lectura. Dado que esta API es 100% *read-only* (no existen métodos POST/PUT/DELETE), este microservicio es seguro por diseño contra escrituras maliciosas.
+ENTRA_ISSUER_URI y ENTRA_AUDIENCE son obligatorios. No hay modo permitAll ni credenciales
+inventadas para iniciar la aplicación. La consulta del issuer es diferida para que health
+no dependa de una llamada a Entra al arrancar.
 
-## Restricciones
-- No se exponen endpoints de manera pública (ni con `permitAll`).
-- Toda llamada HTTP hacia `ms-eventomax-audit` debe provenir del BFF a través de la red privada.
-- No se han inventado headers arbitrarios para inyectar identidad; la seguridad depende de la arquitectura de la infraestructura y del gateway.
+## Contrato propuesto para EMX-72
+
+API Gateway valida JWT; BFF vuelve a validar y autorizar, y reenvía el mismo Bearer a Audit.
+Esto es coherente con el DomainRoutingClient inspeccionado en BFF develop
+b82142c7d815f36c979a620dcb2c795042fe7aca, que propaga Authorization para sus rutas existentes.
+La ruta Audit todavía no existe en ese HEAD: su integración no se considera probada.
+
+## Perímetro de red
+
+Compose productivo no publica puertos. Infraestructura debe restringir entrada al servicio
+desde el BFF. eventomax-net es una red compartida y no acredita exclusividad del llamador.
+JWT tampoco prueba que una petición atravesó API Gateway/BFF: la restricción de red
+es necesaria para respetar el flujo oficial. Los puertos de desarrollo solo usan loopback.
+
+## Evidencia pendiente antes de cierre
+
+- Routing Audit en BFF y propagación Bearer verificadas.
+- 200 Admin/Auditor; 401 sin token, expirado, firma inválida, issuer/audience incorrectos.
+- 403 rol no permitido o scope ausente; rechazo de escritura.
+- Prueba del acceso directo bloqueado por red y flujo cloud completo.
+- Configuración Entra/API Gateway y valores de issuer/audience aprobados.
+
+Las pruebas locales usan firmas RSA y un decoder de prueba con la misma política de
+validación. No equivalen a una integración con el tenant real.

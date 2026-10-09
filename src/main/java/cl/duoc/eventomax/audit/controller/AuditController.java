@@ -32,13 +32,19 @@ public class AuditController {
             @RequestParam(required = false) String actor,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
-            @RequestParam(required = false) String type) {
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+
+        if (page < 0 || size < 1 || size > 200) {
+            throw new IllegalArgumentException("page must be >= 0 and size between 1 and 200");
+        }
 
         if (from != null && to != null && from.isAfter(to)) {
             throw new InvalidDateRangeException("The 'from' date cannot be after the 'to' date");
         }
 
-        List<AuditEventResponse> timeline = auditQueryService.getTimeline(actor, from, to, type);
+        List<AuditEventResponse> timeline = auditQueryService.getTimeline(actor, from, to, type, page, size);
         return ResponseEntity.ok(timeline);
     }
 }

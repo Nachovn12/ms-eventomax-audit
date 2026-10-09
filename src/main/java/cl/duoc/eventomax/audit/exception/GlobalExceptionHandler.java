@@ -13,6 +13,11 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidArgument(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", "Bad Request", "message", ex.getMessage()));
+    }
+
     @ExceptionHandler(InvalidDateRangeException.class)
     public ResponseEntity<Map<String, String>> handleInvalidDateRangeException(InvalidDateRangeException ex) {
         Map<String, String> error = new HashMap<>();

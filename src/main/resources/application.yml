@@ -18,12 +18,37 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
+      enable-auto-commit: false
+      auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
       properties:
-        spring.json.trusted.packages: '*'
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+        spring.json.value.default.type: cl.duoc.eventomax.audit.dto.ProductionEventMessage
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.eventomax.audit.dto
+    listener:
+      ack-mode: record
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${ENTRA_ISSUER_URI}
+
+eventomax:
+  security:
+    jwt:
+      audience: ${ENTRA_AUDIENCE}
+  audit:
+    kafka:
+      # Temporary DTO: enable only in isolated tests until EMX-71 is approved.
+      enabled: ${AUDIT_KAFKA_ENABLED:false}
+      topic: ${AUDIT_KAFKA_TOPIC:productions.events}
+      group-id: ${AUDIT_KAFKA_GROUP_ID:audit-group}
+      auto-create-topics: false
 
 management:
   endpoints:
