@@ -1,85 +1,234 @@
 package cl.duoc.eventomax.audit;
 
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.clients.producer.*;
-import org.apache.kafka.common.serialization.*;
-import org.junit.jupiter.api.*;
+import cl.duoc.eventomax.audit.security.AuditSecurityConfiguration;
+import tools.jackson.databind.ObjectMapper;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.kafka.test.EmbeddedKafkaBroker;
-import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Transport tests use the provisional DTO ONLY on an isolated topic, not the EMX-71 contract. */
 @SpringBootTest(properties = {
         "eventomax.audit.kafka.enabled=true",
-        "eventomax.audit.kafka.topic=audit.test",
-        "eventomax.audit.kafka.group-id=audit-test",
+        "eventomax.audit.kafka.topic=productions.events.test",
+        "eventomax.audit.kafka.group-id=audit-test-group",
         "eventomax.audit.kafka.auto-create-topics=true"
 })
 @ActiveProfiles("test")
 @Testcontainers
-@EmbeddedKafka(partitions = 1, topics = "audit.test", bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 @DirtiesContext
+@Import(AuditKafkaTests.TestJwtKeys.class)
 class AuditKafkaTests {
+
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+    @Container
+    static final ConfluentKafkaContainer KAFKA = new ConfluentKafkaContainer("confluentinc/cp-kafka:7.4.0");
+
+    static final RSAKey KEY = newKey();
+
     @DynamicPropertySource
-    static void database(DynamicPropertyRegistry r) {
+    static void dynamicProperties(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         r.add("spring.datasource.username", POSTGRES::getUsername);
         r.add("spring.datasource.password", POSTGRES::getPassword);
+        r.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        r.add("ENTRA_ISSUER_URI", () -> "https://issuer.invalid/test");
+        r.add("ENTRA_AUDIENCE", () -> "audit-test");
     }
-    @Autowired EmbeddedKafkaBroker broker;
+
     @Autowired JdbcTemplate jdbc;
+    @Autowired WebApplicationContext context;
+    MockMvc mvc;
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    @BeforeEach
+    void setup() {
+        jdbc.execute("TRUNCATE audit_event, processed_event RESTART IDENTITY");
+        mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+    }
+
+    // Real EMX-92 ProductionCreated JSON
+    private static final String REAL_PRODUCTION_CREATED_JSON = """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "260a509a-74b6-4dc4-950e-cde9af1dfafe",
+              "type": "ProductionCreated",
+              "timestamp": "2026-10-09T05:05:51.299570600Z",
+              "traceId": null,
+              "correlationId": null,
+              "actor": "actor-abc",
+              "payload": {
+                "productionId": 1,
+                "organizerId": "org-1",
+                "productionName": "Test JSON and Order",
+                "status": "SOLICITADO",
+                "scheduledAt": "2026-10-19T02:05:51.2553441",
+                "location": "Test Location",
+                "occurredAt": "2026-10-09T05:05:51.299570600Z"
+              }
+            }
+            """.strip();
+
+    // Real EMX-92 ProductionStatusChanged JSON
+    private static final String REAL_PRODUCTION_STATUS_CHANGED_JSON = """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "47609d46-b65b-495c-88cb-1f9bed8170ea",
+              "type": "ProductionStatusChanged",
+              "timestamp": "2026-10-09T05:05:51.409880800Z",
+              "traceId": null,
+              "correlationId": null,
+              "actor": "actor-def",
+              "payload": {
+                "productionId": 1,
+                "organizerId": "org-1",
+                "productionName": "Test JSON and Order",
+                "previousStatus": "SOLICITADO",
+                "newStatus": "CONFIRMADO",
+                "scheduledAt": "2026-10-19T02:05:51.255344",
+                "location": "Test Location",
+                "occurredAt": "2026-10-09T05:05:51.409880800Z"
+              }
+            }
+            """.strip();
 
     @Test
-    void consumesHeaderlessJsonAndDuplicateOnlyOnce() throws Exception {
-        String id = "delivery-" + UUID.randomUUID();
-        send(json(id, "alice"));
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(id)).isEqualTo(1));
-        send(json(id, "alice"));
-        // A later record on the same partition is a processing barrier for the duplicate.
-        String barrier = "barrier-" + UUID.randomUUID();
-        send(json(barrier, "alice"));
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(barrier)).isEqualTo(1));
-        assertThat(count(id)).isEqualTo(1);
+    void consumesRealProductionCreatedEventAndPersistsToPostgres() throws Exception {
+        send(REAL_PRODUCTION_CREATED_JSON);
+
+        String eventId = "260a509a-74b6-4dc4-950e-cde9af1dfafe";
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT event_id, actor, type, event_timestamp, details FROM audit_event WHERE event_id = ?",
+                eventId);
+
+        assertThat(row.get("event_id")).isEqualTo(eventId);
+        assertThat(row.get("actor")).isEqualTo("actor-abc");
+        assertThat(row.get("type")).isEqualTo("ProductionCreated");
+        assertThat(row.get("event_timestamp").toString()).startsWith("2026-10-09 05:05:51");
+
+        String details = (String) row.get("details");
+        assertThat(details).contains("\"productionId\":1");
+        assertThat(details).contains("\"productionName\":\"Test JSON and Order\"");
+        assertThat(details).contains("\"status\":\"SOLICITADO\"");
+        assertThat(details).contains("\"organizerId\":\"org-1\"");
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
+    }
+
+    @Test
+    void consumesRealProductionStatusChangedEventAndPersistsToPostgres() throws Exception {
+        send(REAL_PRODUCTION_STATUS_CHANGED_JSON);
+
+        String eventId = "47609d46-b65b-495c-88cb-1f9bed8170ea";
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT event_id, actor, type, event_timestamp, details FROM audit_event WHERE event_id = ?",
+                eventId);
+
+        assertThat(row.get("event_id")).isEqualTo(eventId);
+        assertThat(row.get("actor")).isEqualTo("actor-def");
+        assertThat(row.get("type")).isEqualTo("ProductionStatusChanged");
+        assertThat(row.get("event_timestamp").toString()).startsWith("2026-10-09 05:05:51");
+
+        String details = (String) row.get("details");
+        assertThat(details).contains("\"previousStatus\":\"SOLICITADO\"");
+        assertThat(details).contains("\"newStatus\":\"CONFIRMADO\"");
+        assertThat(details).contains("\"productionId\":1");
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
+    }
+
+    @Test
+    void idempotencyDuplicateRealEventConsumedOnlyOnce() throws Exception {
+        String eventId = "260a509a-74b6-4dc4-950e-cde9af1dfafe";
+        send(REAL_PRODUCTION_CREATED_JSON);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+        // Send duplicate
+        send(REAL_PRODUCTION_CREATED_JSON);
+
+        // Send barrier record with another ID on same partition
+        String barrierId = UUID.randomUUID().toString();
+        String barrierJson = REAL_PRODUCTION_CREATED_JSON.replace(eventId, barrierId);
+        send(barrierJson);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(barrierId)).isEqualTo(1));
+
+        // Duplicate was safely ignored, exactly 1 persisted
+        assertThat(count(eventId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
     }
 
     @Test
     void retriesTransientDatabaseFailureThenPersistsOnce() throws Exception {
+        String transientId = UUID.randomUUID().toString();
         jdbc.execute("CREATE SEQUENCE retry_attempt START 1");
-        jdbc.execute("""
+        jdbc.execute(String.format("""
             CREATE FUNCTION fail_first_two() RETURNS trigger AS $$
             BEGIN
-                IF NEW.event_id = 'transient' AND nextval('retry_attempt') <= 2 THEN
+                IF NEW.event_id = '%s' AND nextval('retry_attempt') <= 2 THEN
                     RAISE EXCEPTION 'temporary test failure';
                 END IF;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-            """);
+            """, transientId));
         jdbc.execute("CREATE TRIGGER transient_failure BEFORE INSERT ON audit_event FOR EACH ROW EXECUTE FUNCTION fail_first_two()");
         try {
-            send(json("transient", "alice"));
-            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count("transient")).isEqualTo(1));
+            String transientJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", transientId);
+            send(transientJson);
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(transientId)).isEqualTo(1));
             assertThat(jdbc.queryForObject("SELECT last_value FROM retry_attempt", Long.class)).isEqualTo(3L);
-            assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = 'transient'", Integer.class)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, transientId)).isEqualTo(1);
         } finally {
             jdbc.execute("DROP TRIGGER transient_failure ON audit_event");
             jdbc.execute("DROP FUNCTION fail_first_two()");
@@ -88,37 +237,69 @@ class AuditKafkaTests {
     }
 
     @Test
-    void permanentFailureReachesDltWithoutPersisting() throws Exception {
-        String id = "invalid-" + UUID.randomUUID();
-        String payload = json(id, "");
-        assertDlt(payload, false);
+    void invalidSchemaVersionReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        String invalidSchema = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"schemaVersion\": \"1.0\"", "\"schemaVersion\": \"2.0\"");
+        assertDlt(invalidSchema, false);
+        assertThat(count(id)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+    }
+
+    @Test
+    void missingMandatoryFieldReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        // Missing actor
+        String missingActor = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"actor\": \"actor-abc\",", "\"actor\": \"\",");
+        assertDlt(missingActor, false);
         assertThat(count(id)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
     }
 
     @Test
     void malformedJsonReachesDltAsOriginalBytesAndDoesNotBlockNextRecord() throws Exception {
-        assertDlt("{malformed-" + UUID.randomUUID(), true);
-        String id = "after-poison-" + UUID.randomUUID();
-        send(json(id, "alice"));
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(id)).isEqualTo(1));
+        assertDlt("{malformed-poison-pill-" + UUID.randomUUID(), true);
+        String nextId = UUID.randomUUID().toString();
+        String validJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", nextId);
+        send(validJson);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(nextId)).isEqualTo(1));
+    }
+
+    @Test
+    void endToEndFlowFromKafkaToPostgresToRestTimeline() throws Exception {
+        send(REAL_PRODUCTION_CREATED_JSON);
+        String eventId = "260a509a-74b6-4dc4-950e-cde9af1dfafe";
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+        String jwt = token("Auditor", "access_as_user", "audit-test", "https://issuer.invalid/test", Instant.now().plusSeconds(300));
+
+        mvc.perform(get("/api/audit/timeline")
+                        .header("Authorization", "Bearer " + jwt)
+                        .param("actor", "actor-abc")
+                        .param("type", "ProductionCreated"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].eventId").value(eventId))
+                .andExpect(jsonPath("$[0].actor").value("actor-abc"))
+                .andExpect(jsonPath("$[0].type").value("ProductionCreated"))
+                .andExpect(jsonPath("$[0].details").value(org.hamcrest.Matchers.containsString("Test JSON and Order")));
     }
 
     private void assertDlt(String payload, boolean raw) throws Exception {
         Map<String,Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, broker.getBrokersAsString());
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "inspect-" + UUID.randomUUID());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         try (var consumer = new KafkaConsumer<String, byte[]>(props, new StringDeserializer(), new ByteArrayDeserializer())) {
-            consumer.subscribe(List.of("audit.test-audit-dlt"));
+            consumer.subscribe(List.of("productions.events.test-audit-dlt"));
             send(payload);
             await().atMost(Duration.ofSeconds(30)).until(() -> {
                 for (var record : consumer.poll(Duration.ofMillis(200))) {
                     String received = new String(record.value(), StandardCharsets.UTF_8);
                     if (raw && payload.equals(received)) return true;
                     if (!raw && received.startsWith("{\"")) {
-                        var mapper = tools.jackson.databind.json.JsonMapper.builder().build();
                         if (mapper.readTree(payload).equals(mapper.readTree(received))) return true;
                     }
                 }
@@ -132,16 +313,33 @@ class AuditKafkaTests {
     }
 
     private void send(String json) throws Exception {
-        var props = Map.<String,Object>of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker.getBrokersAsString(),
+        var props = Map.<String,Object>of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
                 ProducerConfig.ACKS_CONFIG, "all");
         try (var producer = new KafkaProducer<String,String>(props, new StringSerializer(), new StringSerializer())) {
-            producer.send(new ProducerRecord<>("audit.test", "same-partition", json)).get(10, TimeUnit.SECONDS);
+            producer.send(new ProducerRecord<>("productions.events.test", "1", json)).get(10, TimeUnit.SECONDS);
         }
     }
 
-    private static String json(String id, String actor) {
-        return """
-                {"eventId":"%s","actor":"%s","type":"STATUS","timestamp":"2026-10-08T10:00:00","details":"test fixture"}
-                """.formatted(id, actor).strip();
+    static RSAKey newKey() {
+        try { return new RSAKeyGenerator(2048).generate(); } catch (Exception e) { throw new IllegalStateException(e); }
+    }
+
+    static String token(String role, String scope, String audience, String issuer, Instant expires) throws Exception {
+        var claims = new JWTClaimsSet.Builder().subject("test-user").issuer(issuer).audience(audience)
+                .claim("roles", List.of(role)).claim("scp", scope);
+        if (expires != null) claims.expirationTime(Date.from(expires));
+        var jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.RS256), claims.build());
+        jwt.sign(new RSASSASigner(KEY)); return jwt.serialize();
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TestJwtKeys {
+        @Bean @Primary
+        JwtDecoder localTestDecoder() throws Exception {
+            var decoder = NimbusJwtDecoder.withPublicKey(KEY.toRSAPublicKey()).build();
+            decoder.setJwtValidator(AuditSecurityConfiguration.tokenValidator("https://issuer.invalid/test", "audit-test"));
+            return decoder;
+        }
     }
 }

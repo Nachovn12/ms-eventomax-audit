@@ -26,7 +26,7 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
       properties:
         spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
-        spring.json.value.default.type: cl.duoc.eventomax.audit.dto.ProductionEventMessage
+        spring.json.value.default.type: cl.duoc.eventomax.audit.dto.KafkaEventEnvelope
         spring.json.use.type.headers: false
         spring.json.trusted.packages: cl.duoc.eventomax.audit.dto
     listener:
@@ -44,7 +44,7 @@ eventomax:
       audience: ${ENTRA_AUDIENCE}
   audit:
     kafka:
-      # Temporary DTO: enable only in isolated tests until EMX-71 is approved.
+      # Kafka consumer for productions.events (EMX-91 contract); disabled by default until explicit activation
       enabled: ${AUDIT_KAFKA_ENABLED:false}
       topic: ${AUDIT_KAFKA_TOPIC:productions.events}
       group-id: ${AUDIT_KAFKA_GROUP_ID:audit-group}
