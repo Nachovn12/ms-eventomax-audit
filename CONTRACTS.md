@@ -1,26 +1,31 @@
-# Contratos Audit (EMX-86)
+# Contratos Audit — EMX-86
 
-## API Contract
+## REST implementado
 
-**Endpoint:** `GET /api/audit/timeline`
+GET /api/audit/timeline, array de:
+`eventId: string, actor: string, type: string, timestamp: ISO local datetime, details: string|null`.
 
-**Descripción:** Retorna el timeline de eventos de auditoría (solo lectura).
+Filtros opcionales actor/type por igualdad exacta; from/to inclusivos.
+Combinación AND. Fechas sin offset según contrato provisional existente.
+Paginación: page=0, size=50; page >= 0; 1 <= size <= 200.
+Orden timestamp DESC, id DESC. Página fuera del rango: [].
+400 para rango invertido, fecha o paginación inválidas.
+401 sin JWT válido; 403 sin scope/rol o para escritura.
 
-**Parámetros de consulta (Filtros soportados):**
-- `actor` (String): Filtra por el actor que realizó la acción.
-- `from` (DateTime): Fecha y hora de inicio.
-- `to` (DateTime): Fecha y hora de fin.
-- `type` (String): Filtra por tipo de evento.
+La respuesta sigue siendo un array: la paginación cambia el límite por defecto,
+no agrega un envelope. Clientes deben solicitar páginas sucesivas.
 
-**Validaciones:**
-- Si `from > to` -> `400 Bad Request`
-- Si cualquier fecha tiene un formato inválido -> `400 Bad Request`
+## Kafka: pendiente EMX-71
 
-## Kafka Consumer Mapping (`productions.events`)
+ProductionEventMessage NO es un contrato aprobado de Productions.
+El listener está desactivado por defecto. Sus campos actuales son una fixture provisional
+para verificar transporte, retry/DLT y persistencia en pruebas aisladas.
 
-> **[BLOQUEADO]** Mapeo pendiente del contrato oficial de Kafka `productions.events` (Dependencia: EMX-71).
-> No se implementarán suposiciones sobre los campos exactos (`actor`, `metadata`, `productionId`, `traceId`, `correlationId`, etc.) hasta que el productor defina el esquema.
+Antes de habilitar:
+1. Referenciar commit/versión del contrato de EMX-71.
+2. Acordar eventId, tipos, actor real, instante/zona horaria y contexto de producción.
+3. Mapear trazabilidad solo cuando exista en el evento real; no inferir actor desde organizerId.
+4. Validar esquema y ejemplo JSON compartido desde el productor.
+5. Aprovisionar tópicos de retry/DLT y demostrar replay idempotente.
 
-## Estrategia `productions.events` y `audit.timeline`
-- `ms-eventomax-audit` consumirá los eventos del tópico `productions.events` para alimentar su read model interno.
-- No se implementará la publicación en un tópico conceptual `audit.timeline` a menos que sea explícitamente requerido por la arquitectura integrada, ya que el API `/api/audit/timeline` es el mecanismo oficial de lectura para el frontend.
+No se publica audit.timeline. La API es el mecanismo de consulta.

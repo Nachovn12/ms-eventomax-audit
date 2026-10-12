@@ -1,0 +1,31 @@
+name: Audit verification
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify with PostgreSQL containers and embedded Kafka
+        run: bash mvnw -B -ntp verify
+      - name: Build container after tests pass
+        run: docker build -t eventomax-audit:ci .
+      - name: Verify runtime health, authentication and migrations
+        shell: pwsh
+        run: ./scripts/Smoke-Local.ps1 -Image eventomax-audit:ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-test-reports
+          path: target/surefire-reports/

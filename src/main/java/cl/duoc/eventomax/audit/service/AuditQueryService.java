@@ -4,6 +4,8 @@ import cl.duoc.eventomax.audit.dto.AuditEventResponse;
 import cl.duoc.eventomax.audit.model.AuditEvent;
 import cl.duoc.eventomax.audit.repository.AuditEventRepository;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,7 +25,11 @@ public class AuditQueryService {
         this.auditEventRepository = auditEventRepository;
     }
 
-    public List<AuditEventResponse> getTimeline(String actor, LocalDateTime from, LocalDateTime to, String type) {
+    public List<AuditEventResponse> getTimeline(String actor, LocalDateTime from, LocalDateTime to, String type,
+                                               int page, int size) {
+        if (page < 0 || size < 1 || size > 200) {
+            throw new IllegalArgumentException("page must be >= 0 and size between 1 and 200");
+        }
         Specification<AuditEvent> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             
@@ -40,13 +46,11 @@ public class AuditQueryService {
                 predicates.add(cb.lessThanOrEqualTo(root.get("timestamp"), to));
             }
             
-            // Order by timestamp descending
-            query.orderBy(cb.desc(root.get("timestamp")));
-            
             return cb.and(predicates.toArray(new Predicate[0]));
         };
 
-        return auditEventRepository.findAll(spec).stream()
+        return auditEventRepository.findAll(spec,
+                        PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamp", "id"))).stream()
                 .map(event -> new AuditEventResponse(
                         event.getEventId(),
                         event.getActor(),

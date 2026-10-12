@@ -1,55 +1,94 @@
-# EventoMax Audit Microservice (ms-eventomax-audit)
+# EventoMax Audit — EMX-69
 
-Microservicio responsable de la auditoría y trazabilidad del proyecto EventoMax, de manera *read-only*.
+Java 25 / Spring Boot 4.1.1. API de lectura sobre PostgreSQL, alimentada por Kafka.
+Flujo obligatorio: Angular → Entra ID → API Gateway → BFF → Audit.
 
-## API y Contratos
+## Estado de integración
 
-### Timeline (`GET /api/audit/timeline`)
-El endpoint principal para consultar el timeline de auditoría es de **solo lectura**.
-- **Filtros soportados:**
-  - `actor` (String)
-  - `from` (ISO DateTime, ej: `2026-10-08T10:00:00`)
-  - `to` (ISO DateTime)
-  - `type` (String)
+Esta corrección endurece Audit, pero **no cierra EMX-69**:
+- EMX-71 debe aprobar el contrato real de `productions.events`.
+- EMX-72 debe incorporar routing BFF y validar propagación del Bearer.
+- AWS, Entra real y demo E2E todavía requieren evidencia.
+- El DTO Kafka sigue siendo provisional: `AUDIT_KAFKA_ENABLED=false` por defecto.
+  Las pruebas de transporte usan un tópico aislado y no acreditan compatibilidad con Productions.
 
-**Respuestas:**
-- `200 OK`: Lista de eventos.
-- `400 Bad Request`: Si `from > to` o si el formato de fechas es inválido.
+## API
 
-## Arquitectura y Componentes
+`GET /api/audit/timeline?actor=...&type=...&from=...&to=...&page=0&size=50`
 
-### Flyway y PostgreSQL
-Se utiliza **Flyway** para el versionamiento y la creación del esquema en PostgreSQL (`V1__init_audit_schema.sql`). La configuración de Hibernate es estricta (`ddl-auto=validate`) para prevenir alteraciones accidentales del esquema.
+Respuesta: array JSON, conservando la forma anterior. Filtros exactos actor/type, combinados
+con AND; fechas inclusivas. Orden por timestamp descendente y luego ID descendente.
+page >= 0; size entre 1 y 200. Sin parámetros: primera página de 50.
+Rango invertido, fecha inválida y paginación inválida responden 400.
+El contrato temporal usa fecha ISO local sin offset; la normalización UTC se acordará en EMX-71.
+Ver CONTRACTS.md.
 
-### Kafka y Consumo de Eventos
-Consume el tópico `productions.events`.
-- **Idempotencia:** Se verifica cada evento consumido cruzando su `eventId` contra la tabla `processed_event` de manera transaccional. Los eventos duplicados se descartan (no duplican el timeline).
-- **Retry y DLT:** Si falla el consumo, se realizan 3 reintentos (`@RetryableTopic`). Si persisten los fallos, el evento se envía a un DLT (`@DltHandler`) para su intervención.
+## Seguridad
 
-### Seguridad (Trust Boundary)
-- El microservicio reside en la red interna y no está expuesto públicamente.
-- La validación de JWT (y su pertenencia a Entra ID), así como el control de RBAC (Admin, Auditor) se gestiona en la frontera (BFF / API Gateway).
-- El microservicio no asume roles de Resource Server de manera independiente al no recibir el token de forma directa. (Referencia: `TRUST_BOUNDARY.md`).
+JWT firmado por el issuer aprobado, audiencia correcta, exp obligatorio, scope
+`access_as_user` y rol `Admin` o `Auditor`. Solo lectura.
+Health es accesible sin JWT en la red interna; el resto de rutas no aprobadas se deniega.
+Swagger/OpenAPI requiere los mismos permisos. Nunca exponer Audit directamente en Internet.
+Ver TRUST_BOUNDARY.md.
 
-## Entorno (Variables)
-No almacenes valores reales aquí (ni secretos). Configura un archivo `.env` basándote en `.env.example`:
-- `POSTGRES_DB`
-- `DB_URL` (jdbc:postgresql://host:port/db)
-- `DB_USER`
-- `DB_PASSWORD`
-- `KAFKA_BOOTSTRAP_SERVERS`
+## Configuración y ejecución
 
-## Pruebas
-Todos los tests (contexto, filtros, fechas, controllers y excepciones) se pueden correr vía Maven Wrapper:
-```bash
-./mvnw clean test
+Copiar `.env.example` a `.env` y completar DB_USER, DB_PASSWORD, ENTRA_ISSUER_URI y
+ENTRA_AUDIENCE con valores aprobados. No versionar credenciales.
+`docker compose up -d --build` levanta PostgreSQL y Audit local.
+Los puertos de desarrollo solo se enlazan a 127.0.0.1: API 8084 y PostgreSQL 5435.
+En Docker, localhost no identifica el host ni otro contenedor. Ajustar
+KAFKA_BOOTSTRAP_SERVERS y los advertised listeners del broker cuando corresponda.
+
+Producción: `docker compose -f docker-compose.prod.yml up -d --build`, únicamente
+con autorización de despliegue. Requiere DB_URL y red externa eventomax-net.
+El Compose productivo no publica puertos. La red compartida no garantiza por sí sola
+que únicamente el BFF pueda conectar.
+
+## Persistencia y migraciones
+
+Flyway habilitado y Hibernate `ddl-auto=validate`.
+V1 permanece intacta; V2 agrega UNIQUE a audit_event.event_id.
+Antes de aplicar V2 en una base existente, comprobar:
+```sql
+SELECT event_id, count(*) FROM audit_event GROUP BY event_id HAVING count(*) > 1;
 ```
+Si hay duplicados, resolver su conservación con el equipo antes de migrar. La migración
+falla sin borrar información; no hace limpieza automática.
+Una inserción `ON CONFLICT DO NOTHING` reclama eventId en processed_event. La reserva
+y el timeline pertenecen a la misma transacción; un fallo revierte ambos.
 
-## Docker Compose (Local)
-Para ejecutar este microservicio de manera local junto con su base de datos:
-```bash
-docker compose up -d --build
+## Kafka provisional: solo habilitar tras cerrar EMX-71
+
+Se incluye el starter Kafka de Spring Boot 4 para registrar realmente los listeners.
+JSON sin cabeceras de clase se interpreta con el DTO local; se ignoran los tipos remotos.
+ErrorHandlingDeserializer conserva bytes ilegibles para DLT.
+Retry utiliza serialización JSON/byte[] y tres intentos totales (inicial + dos reintentos).
+Sufijos exclusivos de Audit: `-audit-retry`, `-audit-dlt`.
+La autocreación de tópicos está desactivada en producción. Infraestructura debe
+provisionar principal, retry y DLT con particiones compatibles antes de habilitar el listener.
+Confirmar nombres efectivos con la versión de Spring Kafka usada y la configuración final.
+
+El consumidor automático DLT permanece detenido para no avanzar offsets sin intervención.
+Revisar con un grupo de inspección separado, registrar tópico/partición/offset y causa,
+corregir el problema y acordar un replay manteniendo eventId. No borrar DLT ni reiniciar
+offsets productivos automáticamente. Retención y monitoreo deben acordarse con infraestructura.
+
+## Pruebas reproducibles
+
+Requisitos: Java 25, Docker operativo y acceso inicial a Maven Central/Docker Hub.
+```sh
+./mvnw -B -ntp verify
 ```
-Mapeo de puertos local (por arquitectura DSY1107):
-- **Audit MS:** `8084` -> interno `8080`
-- **PostgreSQL:** `5435` -> interno `5432`
+Windows: `.\\mvnw.cmd -B -ntp verify`.
+PostgreSQL 17 efímero por Testcontainers, Flyway real y Kafka embebido.
+Se prueban concurrencia, rollback, filtros, JWT firmado con claves efímeras,
+reintentos, DLT y JSON inválido. Ninguna prueba requiere credenciales cloud.
+Reportes: target/surefire-reports.
+CI ejecuta verify, construye Docker y ejecuta scripts/Smoke-Local.ps1; conserva reportes.
+Para repetir el smoke local, construir la imagen eventomax-audit:emx69-review y ejecutar
+`pwsh ./scripts/Smoke-Local.ps1`. Usa una red y PostgreSQL efímeros; los elimina al terminar.
+Dockerfile omite pruebas porque Docker-in-Docker no está disponible en la etapa de build:
+la prueba es un gate previo obligatorio, no una garantía del build de imagen por sí solo.
+
+Matriz y evidencia: docs/EMX-69-correcciones.md.

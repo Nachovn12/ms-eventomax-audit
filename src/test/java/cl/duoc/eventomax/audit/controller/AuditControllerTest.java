@@ -14,12 +14,20 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.Collections;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @ExtendWith(MockitoExtension.class)
 public class AuditControllerTest {
+
+    @Test
+    void rejectsUnboundedOrNegativePages() throws Exception {
+        mockMvc.perform(get("/api/audit/timeline").param("size", "201")).andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/audit/timeline").param("size", "0")).andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/audit/timeline").param("page", "-1")).andExpect(status().isBadRequest());
+    }
 
     private MockMvc mockMvc;
 
@@ -38,7 +46,7 @@ public class AuditControllerTest {
 
     @Test
     public void getTimeline_Returns200() throws Exception {
-        when(auditQueryService.getTimeline(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        when(auditQueryService.getTimeline(any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(Collections.emptyList());
 
         mockMvc.perform(get("/api/audit/timeline"))
                 .andExpect(status().isOk());
@@ -46,7 +54,7 @@ public class AuditControllerTest {
 
     @Test
     public void getTimeline_WithFilters_Returns200() throws Exception {
-        when(auditQueryService.getTimeline(any(), any(), any(), any())).thenReturn(Collections.emptyList());
+        when(auditQueryService.getTimeline(any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(Collections.emptyList());
 
         mockMvc.perform(get("/api/audit/timeline")
                 .param("actor", "admin")
