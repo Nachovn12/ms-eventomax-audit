@@ -31,6 +31,12 @@ public class AuditEvent {
     @Column(columnDefinition = "TEXT")
     private String details;
 
+    @Column(name = "trace_id")
+    private String traceId;
+
+    @Column(name = "correlation_id")
+    private String correlationId;
+
     public AuditEvent() {
     }
 
@@ -80,5 +86,21 @@ public class AuditEvent {
 
     public void setDetails(String details) {
         this.details = details;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
+    public void setCorrelationId(String correlationId) {
+        this.correlationId = correlationId;
     }
 }

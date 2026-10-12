@@ -67,7 +67,7 @@ class AuditApplicationTests {
 
     @Test
     void migratesAndPersistsSequentialDuplicateOnce() {
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success AND version IN ('1','2')", Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success AND version IN ('1','2','3')", Integer.class)).isEqualTo(3);
         service.processEvent(event("same", "alice", "STATUS", LocalDateTime.of(2026,10,8,10,0)));
         service.processEvent(event("same", "alice", "STATUS", LocalDateTime.of(2026,10,8,10,0)));
         assertThat(events.count()).isEqualTo(1);
