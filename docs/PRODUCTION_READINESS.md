@@ -1,20 +1,45 @@
 # EventoMax Audit — runbook y gate de despliegue (EMX-69)
 
-> Estado actual: **no desplegado ni validado en AWS**. Código candidato en el PR #4; la incorporación a `develop` y las verificaciones cloud son pasos posteriores. No confundir `BUILD SUCCESS` con un despliegue en producción.
+> Estado actual: **no desplegado ni validado en AWS**. Validación local exitosa de integración Productions → Outbox → Kafka → Audit → BFF. Código candidato en el PR #4; la incorporación a `develop` y las verificaciones cloud son pasos posteriores. No confundir la validación local con un despliegue en producción.
 
 ## 1. Evidencia disponible y criterio de salida
 
 | Aspecto | Evidencia / gate |
 |---|---|
-| Seguridad backend | JWT Entra con issuer/audience/exp/scope/roles probado con firmas RSA de test; falta tenant real |
-| Persistencia | PostgreSQL 17 Testcontainers, idempotencia concurrente, rollback, Flyway V1–V4 |
-| Kafka v1 | Kafka Testcontainers, 28 pruebas del último PR verificado en `9976768`; falta publicación real desde Productions |
-| Artefacto | Docker multi-stage Java 25, proceso non-root, smoke test en CI |
-| REST | `GET /api/audit/timeline` con filtros, paginación, 200/400/401/403 locales |
-| API Gateway, BFF, Angular | **Pendientes** de integración E2E real y pruebas de 401/403/200 desde frontend |
+| Seguridad backend | JWT Entra con issuer/audience/exp/scope/roles probado en CI; validación local exitosa con JWT real de Admin; prueba en vivo de Productor 403 pendiente en Audit |
+| Persistencia | PostgreSQL 17 Testcontainers, idempotencia concurrente, rollback, Flyway V1–V4 aplicada y verificada con PostgreSQL real |
+| Kafka v1 | Ingesta real local comprobada con Productions (EMX-92, producción ID 2, eventId `3935d0f1-0c3c-4bf3-b7a9-901a6942a7eb`); 32 pruebas aprobadas en CI |
+| Artefacto | Docker multi-stage Java 25, proceso non-root, smoke test en CI (`eventomax-audit:smoke`) |
+| REST | `GET /api/audit/timeline` validado localmente con JWT Admin real (HTTP 200) y filtros |
+| BFF, Gateway, Angular | BFF integrado localmente con Audit REST (Admin 200, HEAD 403, sin token 401). Recorrido cloud completo Angular → API Gateway pendiente |
 | Tópico `audit.timeline` del Caso | **Pendiente de decisión de implementación o excepción acordada**, no publicado por Audit |
 
-El resultado CI verificado para `9976768`: 28 pruebas (15 Kafka, 7 aplicación, 5 controlador y 1 Swagger), Docker build y smoke test. **Actualizar esta evidencia con el nuevo SHA/CI tras cualquier cambio.** Ver el historial del PR #4 en GitHub Actions.
+El resultado CI verificado para `ca35b7d4015b2adcda8e19066f4e01a5cf19f4f1`: **32 pruebas aprobadas** (incluyendo trazabilidad distribuida y migración Flyway V4), Docker build y smoke test (`Smoke-Local.ps1`). En `ms-eventomax-bff` (PR #18), el commit `2f32b034c4947a4ca373c1b58603f3d325c975eb` reportó CI SUCCESS con 201 pruebas aprobadas. Ver el historial de GitHub Actions.
+
+### 1.1. Evidencia real de integración local (Octubre 2026)
+
+Se ejecutó la prueba local de integración real con el flujo completo:
+1. **Productions con JWT Productor**: `HTTP 201 Created` (`productionId: 2`, rol `Productor`).
+2. **Transactional Outbox**: Evento registrado y marcado como `SENT`.
+3. **Kafka (`productions.events`)**: Publicación real del evento `ProductionCreated`.
+4. **Audit PostgreSQL**: Ingesta y persistencia en `audit_event` y `processed_event`, conservando `details`, `trace_id` y `correlation_id` (la deduplicación idempotente se verifica en la suite automatizada con Testcontainers).
+5. **Audit REST con JWT Admin**: `GET /api/audit/timeline?type=ProductionCreated&page=0&size=200` → `HTTP 200 OK`, localizando el evento originado por la producción ID 2 mediante su `eventId` dentro del array JSON, con sus campos `traceId` y `correlationId` preservados en el payload de respuesta.
+6. **BFF → Audit REST con JWT Admin**: `GET /api/audit/timeline?type=ProductionCreated&page=0&size=200` vía BFF → `HTTP 200 OK`, recuperando el mismo registro JSON (la propagación de cabeceras HTTP `X-Trace-Id` y `X-Correlation-Id` se verificó por separado en el BFF).
+7. **BFF HEAD Audit con Admin**: `HEAD /api/audit/timeline` → `HTTP 403 Forbidden` (`denyAll()` activo).
+8. **BFF GET Audit sin JWT**: `GET /api/audit/timeline` → `HTTP 401 Unauthorized`.
+
+Identificadores de trazabilidad verificados en el JSON de respuesta:
+- **EventId:** `3935d0f1-0c3c-4bf3-b7a9-901a6942a7eb`
+- **TraceId:** `emx69-productor-trace-20261012`
+- **CorrelationId:** `emx69-productor-corr-20261012`
+
+**Límites estrictos de la evidencia:**
+- La integración comprobada es estrictamente **LOCAL**.
+- No existe todavía evidencia del recorrido cloud completo Angular → API Gateway → BFF → Audit.
+- `AUDIT_KAFKA_ENABLED=false` sigue siendo el valor por defecto; en la prueba local se habilitó expresamente para la captura.
+- La prueba HTTP 403 de GET Audit con JWT Productor real en vivo en el puerto 8084 sigue pendiente (validada en tests de integración del BFF).
+- La publicación en `audit.timeline` sigue pendiente de decisión contractual; no atribuir cumplimiento automático.
+- No se afirma que RDS, Kafka en EC2 o API Gateway se encuentren desplegados ni operativos para esta prueba.
 
 ## 2. Contratos y coordinación previos
 
@@ -32,7 +57,7 @@ El resultado CI verificado para `9976768`: 28 pruebas (15 Kafka, 7 aplicación, 
 | `ENTRA_ISSUER_URI` | Debe coincidir exactamente con `iss` de los access tokens reales (tenant Entra v2.0) |
 | `ENTRA_AUDIENCE` | Debe coincidir con el `aud` real del access token y configuración de API Gateway/BFF |
 | `KAFKA_BOOTSTRAP_SERVERS` | Broker(s) Kafka **privados** en EC2; nunca `localhost` en diferentes hosts |
-| `AUDIT_KAFKA_ENABLED` | Inicialmente `false`; activar a `true` solo tras E2E con broker/tópicos/actor verificados |
+| `AUDIT_KAFKA_ENABLED` | Por defecto `false`; en pruebas locales se activó para validar ingesta real. En cloud activar a `true` solo tras validar conectividad privada con broker EC2 |
 | `AUDIT_KAFKA_TOPIC`, `AUDIT_KAFKA_GROUP_ID` | Por defecto `productions.events`, `audit-group`; personalizar solo con contrato aprobado |
 | `SPRING_PROFILES_ACTIVE` | `prod`; desactiva OpenAPI/Swagger y restringe Actuator a `health` |
 
