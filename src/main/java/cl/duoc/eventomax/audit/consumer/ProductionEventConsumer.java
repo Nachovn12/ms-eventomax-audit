@@ -119,19 +119,28 @@ public class ProductionEventConsumer {
     private void validateProductionId(Map<String, Object> payload, String eventType) {
         requireField(payload, "productionId", eventType);
         Object raw = payload.get("productionId");
-        if (raw instanceof Number number) {
-            if (number.longValue() <= 0) {
-                throw new IllegalArgumentException("productionId must be positive in " + eventType);
+        if (raw instanceof Integer i) {
+            if (i <= 0) {
+                throw new IllegalArgumentException("productionId must be a positive integer in " + eventType + ", received: " + i);
+            }
+        } else if (raw instanceof Long l) {
+            if (l <= 0) {
+                throw new IllegalArgumentException("productionId must be a positive integer in " + eventType + ", received: " + l);
+            }
+        } else if (raw instanceof Short s) {
+            if (s <= 0) {
+                throw new IllegalArgumentException("productionId must be a positive integer in " + eventType + ", received: " + s);
+            }
+        } else if (raw instanceof Byte b) {
+            if (b <= 0) {
+                throw new IllegalArgumentException("productionId must be a positive integer in " + eventType + ", received: " + b);
+            }
+        } else if (raw instanceof java.math.BigInteger bi) {
+            if (bi.compareTo(java.math.BigInteger.ZERO) <= 0 || bi.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+                throw new IllegalArgumentException("productionId must be a positive integer within Long range in " + eventType + ", received: " + bi);
             }
         } else {
-            try {
-                long parsed = Long.parseLong(raw.toString().trim());
-                if (parsed <= 0) {
-                    throw new IllegalArgumentException("productionId must be positive in " + eventType);
-                }
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("productionId must be a valid numeric identifier in " + eventType, e);
-            }
+            throw new IllegalArgumentException("productionId must be an exact positive integer in " + eventType + ", received incompatible type or value: " + raw);
         }
     }
 

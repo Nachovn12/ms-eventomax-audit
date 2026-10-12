@@ -237,6 +237,16 @@ class AuditKafkaTests {
     }
 
     @Test
+    void missingSchemaVersionReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        String missingSchema = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"schemaVersion\": \"1.0\",\n", "");
+        assertDlt(missingSchema, false);
+        assertThat(count(id)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+    }
+
+    @Test
     void invalidSchemaVersionReachesDltWithoutPersisting() throws Exception {
         String id = UUID.randomUUID().toString();
         String invalidSchema = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
@@ -259,12 +269,23 @@ class AuditKafkaTests {
 
     @Test
     void invalidProductionIdReachesDltWithoutPersisting() throws Exception {
+        for (String invalidId : List.of("-5", "0", "1.5", "\"abc\"", "9223372036854775808")) {
+            String id = UUID.randomUUID().toString();
+            String invalidIdJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                    .replace("\"productionId\": 1,", "\"productionId\": " + invalidId + ",");
+            assertDlt(invalidIdJson, false);
+            assertThat(count(id)).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+        }
+    }
+
+    @Test
+    void productionIdWithinLongRangeIsPersisted() throws Exception {
         String id = UUID.randomUUID().toString();
-        String invalidIdJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
-                .replace("\"productionId\": 1,", "\"productionId\": -5,");
-        assertDlt(invalidIdJson, false);
-        assertThat(count(id)).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+        String validMaxLongJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"productionId\": 1,", "\"productionId\": 9223372036854775807,");
+        send(validMaxLongJson);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(id)).isEqualTo(1));
     }
 
     @Test
@@ -380,7 +401,15 @@ class AuditKafkaTests {
                     String received = new String(record.value(), StandardCharsets.UTF_8);
                     if (raw && payload.equals(received)) return true;
                     if (!raw && received.startsWith("{\"")) {
-                        if (mapper.readTree(payload).equals(mapper.readTree(received))) return true;
+                        var pTree = mapper.readTree(payload);
+                        var rTree = mapper.readTree(received);
+                        if (pTree.equals(rTree)) return true;
+                        if (!pTree.has("schemaVersion") && rTree.has("schemaVersion") && rTree.get("schemaVersion").isNull()) {
+                            if (rTree instanceof tools.jackson.databind.node.ObjectNode obj) {
+                                obj.remove("schemaVersion");
+                                if (pTree.equals(obj)) return true;
+                            }
+                        }
                     }
                 }
                 return false;

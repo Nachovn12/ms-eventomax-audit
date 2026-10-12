@@ -6,7 +6,7 @@ import java.util.UUID;
 
 public class KafkaEventEnvelope {
 
-    private String schemaVersion = "1.0";
+    private String schemaVersion;
     private UUID eventId;
     private String type;
     private Instant timestamp;
