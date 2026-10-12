@@ -15,9 +15,11 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.Set;
 
 @Component
 @ConditionalOnProperty(name = "eventomax.audit.kafka.enabled", havingValue = "true")
@@ -61,11 +63,15 @@ public class ProductionEventConsumer {
         try {
             event.setDetails(objectMapper.writeValueAsString(envelope.getPayload()));
         } catch (Exception e) {
-            event.setDetails(envelope.getPayload().toString());
+            throw new IllegalArgumentException("Failed to serialize audit event payload to valid JSON", e);
         }
 
         auditService.processEvent(event);
     }
+
+    private static final Set<String> VALID_PRODUCTION_STATUSES = Set.of(
+            "SOLICITADO", "CONFIRMADO", "EN_MONTAJE", "EN_EJECUCION", "CERRADO", "CANCELADO"
+    );
 
     private void validateEnvelope(KafkaEventEnvelope envelope) {
         if (envelope == null) {
@@ -96,17 +102,65 @@ public class ProductionEventConsumer {
         Map<String, Object> payload = envelope.getPayload();
 
         if ("ProductionCreated".equals(type)) {
-            requireField(payload, "productionId", "ProductionCreated");
+            validateProductionId(payload, "ProductionCreated");
             requireNonBlankField(payload, "productionName", "ProductionCreated");
-            requireNonBlankField(payload, "status", "ProductionCreated");
-            requireField(payload, "occurredAt", "ProductionCreated");
+            validateCreationStatus(payload, "ProductionCreated");
+            validateOccurredAt(payload, "ProductionCreated");
         } else if ("ProductionStatusChanged".equals(type)) {
-            requireField(payload, "productionId", "ProductionStatusChanged");
-            requireNonBlankField(payload, "previousStatus", "ProductionStatusChanged");
-            requireNonBlankField(payload, "newStatus", "ProductionStatusChanged");
-            requireField(payload, "occurredAt", "ProductionStatusChanged");
+            validateProductionId(payload, "ProductionStatusChanged");
+            validateStatus(payload, "previousStatus", "ProductionStatusChanged");
+            validateStatus(payload, "newStatus", "ProductionStatusChanged");
+            validateOccurredAt(payload, "ProductionStatusChanged");
         } else {
             throw new IllegalArgumentException("Unsupported event type: " + type);
+        }
+    }
+
+    private void validateProductionId(Map<String, Object> payload, String eventType) {
+        requireField(payload, "productionId", eventType);
+        Object raw = payload.get("productionId");
+        if (raw instanceof Number number) {
+            if (number.longValue() <= 0) {
+                throw new IllegalArgumentException("productionId must be positive in " + eventType);
+            }
+        } else {
+            try {
+                long parsed = Long.parseLong(raw.toString().trim());
+                if (parsed <= 0) {
+                    throw new IllegalArgumentException("productionId must be positive in " + eventType);
+                }
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("productionId must be a valid numeric identifier in " + eventType, e);
+            }
+        }
+    }
+
+    private void validateCreationStatus(Map<String, Object> payload, String eventType) {
+        requireNonBlankField(payload, "status", eventType);
+        String status = payload.get("status").toString().trim();
+        if (!"SOLICITADO".equals(status)) {
+            throw new IllegalArgumentException("Expected status SOLICITADO for ProductionCreated, received '" + status + "'");
+        }
+    }
+
+    private void validateStatus(Map<String, Object> payload, String field, String eventType) {
+        requireNonBlankField(payload, field, eventType);
+        String status = payload.get(field).toString().trim();
+        if (!VALID_PRODUCTION_STATUSES.contains(status)) {
+            throw new IllegalArgumentException("Invalid production status '" + status + "' in " + eventType);
+        }
+    }
+
+    private void validateOccurredAt(Map<String, Object> payload, String eventType) {
+        requireField(payload, "occurredAt", eventType);
+        Object raw = payload.get("occurredAt");
+        if (raw instanceof Instant) {
+            return;
+        }
+        try {
+            Instant.parse(raw.toString().trim());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("occurredAt must be a valid ISO-8601 UTC timestamp in " + eventType, e);
         }
     }
 

@@ -258,6 +258,86 @@ class AuditKafkaTests {
     }
 
     @Test
+    void invalidProductionIdReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        String invalidIdJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"productionId\": 1,", "\"productionId\": -5,");
+        assertDlt(invalidIdJson, false);
+        assertThat(count(id)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+    }
+
+    @Test
+    void validLifecycleTransitionsArePersistedOnceAndNeverReachDlt() throws Exception {
+        // Lifecycle transitions in ProductionStatus domain:
+        // 1. SOLICITADO -> CONFIRMADO
+        // 2. CONFIRMADO -> EN_MONTAJE
+        // 3. EN_MONTAJE -> EN_EJECUCION
+        // 4. EN_EJECUCION -> CERRADO
+        // 5. CONFIRMADO -> CANCELADO
+        List<String[]> transitions = List.of(
+                new String[]{"SOLICITADO", "CONFIRMADO"},
+                new String[]{"CONFIRMADO", "EN_MONTAJE"},
+                new String[]{"EN_MONTAJE", "EN_EJECUCION"},
+                new String[]{"EN_EJECUCION", "CERRADO"},
+                new String[]{"CONFIRMADO", "CANCELADO"}
+        );
+
+        List<String> eventIds = new ArrayList<>();
+        for (String[] pair : transitions) {
+            String eventId = UUID.randomUUID().toString();
+            eventIds.add(eventId);
+            String json = statusChangedJson(eventId, 1L, pair[0], pair[1]);
+            send(json);
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+            Map<String, Object> row = jdbc.queryForMap(
+                    "SELECT event_id, actor, type, details FROM audit_event WHERE event_id = ?", eventId);
+            assertThat(row.get("type")).isEqualTo("ProductionStatusChanged");
+            String details = (String) row.get("details");
+            assertThat(details).contains("\"previousStatus\":\"" + pair[0] + "\"");
+            assertThat(details).contains("\"newStatus\":\"" + pair[1] + "\"");
+
+            // Persisted exactly once in processed_event
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
+        }
+
+        verifyNotInDlt(eventIds);
+    }
+
+    @Test
+    void nonDomainStatusesEnProcesoFinalizadoAndPublicadoReachDltWithoutPersisting() throws Exception {
+        for (String invalidStatus : List.of("EN_PROCESO", "FINALIZADO", "PUBLICADO")) {
+            String id = UUID.randomUUID().toString();
+            String invalidJson = statusChangedJson(id, 1L, "SOLICITADO", invalidStatus);
+            assertDlt(invalidJson, false);
+            assertThat(count(id)).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+        }
+    }
+
+    @Test
+    void productionCreatedWithNonSolicitadoStatusReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        // ProductionCreated must have status SOLICITADO; CONFIRMADO is rejected on creation
+        String invalidCreated = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"status\": \"SOLICITADO\",", "\"status\": \"CONFIRMADO\",");
+        assertDlt(invalidCreated, false);
+        assertThat(count(id)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+    }
+
+    @Test
+    void invalidOccurredAtReachesDltWithoutPersisting() throws Exception {
+        String id = UUID.randomUUID().toString();
+        String invalidOccurredAtJson = REAL_PRODUCTION_CREATED_JSON.replace("260a509a-74b6-4dc4-950e-cde9af1dfafe", id)
+                .replace("\"occurredAt\": \"2026-10-09T05:05:51.299570600Z\"", "\"occurredAt\": \"not-a-valid-timestamp\"");
+        assertDlt(invalidOccurredAtJson, false);
+        assertThat(count(id)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, id)).isZero();
+    }
+
+    @Test
     void malformedJsonReachesDltAsOriginalBytesAndDoesNotBlockNextRecord() throws Exception {
         assertDlt("{malformed-poison-pill-" + UUID.randomUUID(), true);
         String nextId = UUID.randomUUID().toString();
@@ -318,6 +398,48 @@ class AuditKafkaTests {
                 ProducerConfig.ACKS_CONFIG, "all");
         try (var producer = new KafkaProducer<String,String>(props, new StringSerializer(), new StringSerializer())) {
             producer.send(new ProducerRecord<>("productions.events.test", "1", json)).get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    private static String statusChangedJson(String eventId, long productionId, String prevStatus, String newStatus) {
+        return """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "%s",
+              "type": "ProductionStatusChanged",
+              "timestamp": "2026-10-09T05:05:51.409880800Z",
+              "traceId": null,
+              "correlationId": null,
+              "actor": "actor-lifecycle",
+              "payload": {
+                "productionId": %d,
+                "organizerId": "org-1",
+                "productionName": "Lifecycle Event",
+                "previousStatus": "%s",
+                "newStatus": "%s",
+                "scheduledAt": "2026-10-19T02:05:51.255344",
+                "location": "Main Stage",
+                "occurredAt": "2026-10-09T05:05:51.409880800Z"
+              }
+            }
+            """.formatted(eventId, productionId, prevStatus, newStatus).strip();
+    }
+
+    private void verifyNotInDlt(List<String> eventIds) {
+        Map<String,Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "verify-no-dlt-" + UUID.randomUUID());
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        try (var consumer = new KafkaConsumer<String, byte[]>(props, new StringDeserializer(), new ByteArrayDeserializer())) {
+            consumer.subscribe(List.of("productions.events.test-audit-dlt"));
+            var records = consumer.poll(Duration.ofMillis(1000));
+            for (var record : records) {
+                String payload = new String(record.value(), StandardCharsets.UTF_8);
+                for (String id : eventIds) {
+                    assertThat(payload).doesNotContain(id);
+                }
+            }
         }
     }
 
