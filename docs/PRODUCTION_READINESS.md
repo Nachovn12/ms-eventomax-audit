@@ -7,7 +7,7 @@
 | Aspecto | Evidencia / gate |
 |---|---|
 | Seguridad backend | JWT Entra con issuer/audience/exp/scope/roles probado con firmas RSA de test; falta tenant real |
-| Persistencia | PostgreSQL 17 Testcontainers, idempotencia concurrente, rollback, Flyway V1–V3 |
+| Persistencia | PostgreSQL 17 Testcontainers, idempotencia concurrente, rollback, Flyway V1–V4 |
 | Kafka v1 | Kafka Testcontainers, 28 pruebas del último PR verificado en `9976768`; falta publicación real desde Productions |
 | Artefacto | Docker multi-stage Java 25, proceso non-root, smoke test en CI |
 | REST | `GET /api/audit/timeline` con filtros, paginación, 200/400/401/403 locales |
@@ -49,7 +49,7 @@ Para transporte TLS/SASL Kafka usar propiedades `SPRING_KAFKA_*`/archivos de con
 ## 5. Migraciones, respaldo y lanzamiento
 
 1. Antes de Flyway, respaldar RDS (snapshot/backup aprobado). Si existiera una base con histórico, revisar duplicados `event_id` antes de aplicar V2, sin borrar registros: `SELECT event_id, count(*) FROM audit_event GROUP BY event_id HAVING count(*) > 1;`.
-2. No alterar V1/V2/V3 ya aplicadas; asegurar que Flyway aplica las tres en una base nueva y validar después con `flyway_schema_history`. Hibernate usa `ddl-auto=validate`.
+2. No alterar V1/V2/V3/V4 ya aplicadas; asegurar que Flyway aplica las cuatro en una base nueva y validar después con `flyway_schema_history`. Hibernate usa `ddl-auto=validate`.
 3. Construir desde commit de `develop` aprobado, con digest de imagen identificado, y desplegar mediante Compose sin credenciales versionadas. La política `restart: always` reinicia por terminación, pero **no** por `unhealthy` exclusivamente.
 4. Validar contenedor no-root, `/actuator/health` dentro de la red privada, logs, conexión real a RDS y Flyway. Con Kafka inactivo el healthcheck HTTP **no demuestra** consumo ni conectividad con Kafka.
 5. Una vez validado el broker, tópicos, seguridad y productor real, activar `AUDIT_KAFKA_ENABLED=true` de manera controlada. Verificar ingestión, deduplicación, offsets, retries y DLT antes de habilitar tráfico del frontend.

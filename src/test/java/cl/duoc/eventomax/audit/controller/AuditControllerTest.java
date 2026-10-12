@@ -78,4 +78,21 @@ public class AuditControllerTest {
                 .param("from", "invalid-date"))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    public void getTimeline_ReturnsEventsWithTracing() throws Exception {
+        var response = new cl.duoc.eventomax.audit.dto.AuditEventResponse(
+                "event-123", "actor-1", "ProductionCreated",
+                java.time.LocalDateTime.of(2026, 10, 12, 10, 0),
+                "{\"foo\":\"bar\"}", "trace-abc", "corr-xyz"
+        );
+        when(auditQueryService.getTimeline(any(), any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(java.util.List.of(response));
+
+        mockMvc.perform(get("/api/audit/timeline"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].eventId").value("event-123"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].traceId").value("trace-abc"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].correlationId").value("corr-xyz"));
+    }
 }

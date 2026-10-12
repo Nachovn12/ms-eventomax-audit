@@ -32,9 +32,9 @@ try {
     if ($taskApiStatus -ne '401') { throw "Expected 401 without JWT, got $taskApiStatus" }
     $taskUser = Invoke-Docker exec $taskApp id -u
     if ($taskUser -eq '0') { throw 'Runtime must not run as root' }
-    $taskMigrationCount = Invoke-Docker exec $taskDb psql -U audit -d audit -tAc "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN ('1','2','3')"
-    if ($taskMigrationCount.Trim() -ne '3') { throw 'Expected all three Flyway migrations' }
-    Write-Output 'PASS: Docker healthy; timeline without JWT=401; non-root runtime; Flyway V1/V2/V3 applied.'
+    $taskMigrationCount = Invoke-Docker exec $taskDb psql -U audit -d audit -tAc "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN ('1','2','3','4')"
+    if ($taskMigrationCount.Trim() -ne '4') { throw 'Expected all four Flyway migrations' }
+    Write-Output 'PASS: Docker healthy; timeline without JWT=401; non-root runtime; Flyway V1–V4 applied.'
 } finally {
     # Names belong solely to this invocation. Remove only these ephemeral resources.
     & docker rm -f -v $taskApp $taskDb 2>$null | Out-Null

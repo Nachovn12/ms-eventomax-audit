@@ -56,7 +56,9 @@ public class AuditQueryService {
                         event.getActor(),
                         event.getType(),
                         event.getTimestamp(),
-                        event.getDetails()
+                        event.getDetails(),
+                        event.getTraceId(),
+                        event.getCorrelationId()
                 ))
                 .collect(Collectors.toList());
     }

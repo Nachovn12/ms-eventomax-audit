@@ -147,13 +147,15 @@ class AuditKafkaTests {
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
 
         Map<String, Object> row = jdbc.queryForMap(
-                "SELECT event_id, actor, type, event_timestamp, details FROM audit_event WHERE event_id = ?",
+                "SELECT event_id, actor, type, event_timestamp, details, trace_id, correlation_id FROM audit_event WHERE event_id = ?",
                 eventId);
 
         assertThat(row.get("event_id")).isEqualTo(eventId);
         assertThat(row.get("actor")).isEqualTo("actor-abc");
         assertThat(row.get("type")).isEqualTo("ProductionCreated");
         assertThat(row.get("event_timestamp").toString()).startsWith("2026-10-09 05:05:51");
+        assertThat(row.get("trace_id")).isNull();
+        assertThat(row.get("correlation_id")).isNull();
 
         String details = (String) row.get("details");
         assertThat(details).contains("\"productionId\":1");
@@ -172,13 +174,15 @@ class AuditKafkaTests {
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
 
         Map<String, Object> row = jdbc.queryForMap(
-                "SELECT event_id, actor, type, event_timestamp, details FROM audit_event WHERE event_id = ?",
+                "SELECT event_id, actor, type, event_timestamp, details, trace_id, correlation_id FROM audit_event WHERE event_id = ?",
                 eventId);
 
         assertThat(row.get("event_id")).isEqualTo(eventId);
         assertThat(row.get("actor")).isEqualTo("actor-def");
         assertThat(row.get("type")).isEqualTo("ProductionStatusChanged");
         assertThat(row.get("event_timestamp").toString()).startsWith("2026-10-09 05:05:51");
+        assertThat(row.get("trace_id")).isNull();
+        assertThat(row.get("correlation_id")).isNull();
 
         String details = (String) row.get("details");
         assertThat(details).contains("\"previousStatus\":\"SOLICITADO\"");
@@ -186,6 +190,81 @@ class AuditKafkaTests {
         assertThat(details).contains("\"productionId\":1");
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
+    }
+
+    @Test
+    void consumesEventWithTraceAndCorrelationIdPersistsAndExposesViaRest() throws Exception {
+        String eventId = UUID.randomUUID().toString();
+        String traceId = "test-trace-uuid-1234";
+        String correlationId = "test-corr-uuid-5678";
+        String json = """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "%s",
+              "type": "ProductionStatusChanged",
+              "timestamp": "2026-10-12T17:13:34.060102200Z",
+              "traceId": "%s",
+              "correlationId": "%s",
+              "actor": "actor-trace-test",
+              "payload": {
+                "productionId": 42,
+                "organizerId": "org-trace",
+                "productionName": "Trace Event Test",
+                "previousStatus": "SOLICITADO",
+                "newStatus": "CONFIRMADO",
+                "scheduledAt": "2026-10-19T02:05:51.255344",
+                "location": "Trace Arena",
+                "occurredAt": "2026-10-12T17:13:34.060102200Z"
+              }
+            }
+            """.formatted(eventId, traceId, correlationId).strip();
+
+        send(json);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(eventId)).isEqualTo(1));
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT event_id, actor, type, event_timestamp, details, trace_id, correlation_id FROM audit_event WHERE event_id = ?",
+                eventId);
+
+        assertThat(row.get("event_id")).isEqualTo(eventId);
+        assertThat(row.get("actor")).isEqualTo("actor-trace-test");
+        assertThat(row.get("trace_id")).isEqualTo(traceId);
+        assertThat(row.get("correlation_id")).isEqualTo(correlationId);
+
+        String token = token("Auditor", "access_as_user", "audit-test", "https://issuer.invalid/test", Instant.now().plusSeconds(3600));
+        mvc.perform(get("/api/audit/timeline")
+                .header("Authorization", "Bearer " + token)
+                .param("actor", "actor-trace-test"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventId").value(eventId))
+                .andExpect(jsonPath("$[0].actor").value("actor-trace-test"))
+                .andExpect(jsonPath("$[0].traceId").value(traceId))
+                .andExpect(jsonPath("$[0].correlationId").value(correlationId));
+    }
+
+    @Test
+    void historicalEventsWithNullTraceIdsExposeNullViaRest() throws Exception {
+        String eventId = UUID.randomUUID().toString();
+        jdbc.update("""
+            INSERT INTO audit_event (event_id, actor, type, event_timestamp, details, trace_id, correlation_id)
+            VALUES (?, 'actor-historical', 'ProductionCreated', '2026-10-01 10:00:00', '{"historical":true}', null, null)
+            """, eventId);
+        jdbc.update("INSERT INTO processed_event (event_id, processed_at) VALUES (?, '2026-10-01 10:00:00')", eventId);
+
+        String token = token("Auditor", "access_as_user", "audit-test", "https://issuer.invalid/test", Instant.now().plusSeconds(3600));
+        mvc.perform(get("/api/audit/timeline")
+                .header("Authorization", "Bearer " + token)
+                .param("actor", "actor-historical"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventId").value(eventId))
+                .andExpect(jsonPath("$[0].traceId").value((Object) null))
+                .andExpect(jsonPath("$[0].correlationId").value((Object) null));
+    }
+
+    @Test
+    void flywayAppliedAllMigrationsThroughV4() {
+        List<String> versions = jdbc.queryForList("SELECT version FROM flyway_schema_history ORDER BY installed_rank", String.class);
+        assertThat(versions).contains("1", "2", "3", "4");
     }
 
     @Test

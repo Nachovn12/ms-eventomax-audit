@@ -16,7 +16,7 @@
 | `page` | Entero >= 0; por defecto 0 |
 | `size` | Entero de 1 a 200; por defecto 50 |
 
-Respuesta 200: **array JSON**, no objeto `Page`: `eventId: string`, `actor: string`, `type: string`, `timestamp: string (ISO local sin offset que representa UTC)`, `details: string|null` (texto JSON del payload). Orden `timestamp DESC, id DESC`; filtros combinados con AND. Página sin registros: `[]`.
+Respuesta 200: **array JSON**, no objeto `Page`: `eventId: string`, `actor: string`, `type: string`, `timestamp: string (ISO local sin offset que representa UTC)`, `details: string|null` (texto JSON del payload), `traceId: string|null` (trazabilidad distribuida extremo a extremo), `correlationId: string|null` (correlación de transacción). Orden `timestamp DESC, id DESC`; filtros combinados con AND. Página sin registros: `[]`. Eventos históricos sin tracing devuelven `null` en ambos identificadores.
 
 Estados HTTP: 200 correcto; 400 fecha/rango/paginación inválidos; 401 sin JWT válido; 403 sin rol/scope permitido o para métodos de escritura. Un 200 con `[]` **no prueba** que el consumidor esté recibiendo eventos.
 

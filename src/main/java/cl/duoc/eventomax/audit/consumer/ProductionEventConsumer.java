@@ -54,6 +54,8 @@ public class ProductionEventConsumer {
         event.setEventId(envelope.getEventId().toString());
         event.setActor(envelope.getActor());
         event.setType(envelope.getType());
+        event.setTraceId(envelope.getTraceId());
+        event.setCorrelationId(envelope.getCorrelationId());
 
         // Convert Instant (UTC) explicitly to LocalDateTime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE column
         LocalDateTime eventTimestamp = LocalDateTime.ofInstant(envelope.getTimestamp(), ZoneOffset.UTC);

@@ -15,7 +15,7 @@ Servicio Java 25 / Spring Boot 4.1.1. Recibe eventos de producciones desde Kafka
 
 `GET /api/audit/timeline?actor=...&type=...&from=...&to=...&page=0&size=50`
 
-Devuelve un **array JSON** de objetos `eventId`, `actor`, `type`, `timestamp` y `details`. El último campo es una **cadena con JSON serializado** del payload Kafka, no un objeto JSON anidado. Consultas de solo lectura para Admin y Auditor.
+Devuelve un **array JSON** de objetos `eventId`, `actor`, `type`, `timestamp`, `details`, `traceId` y `correlationId`. Los dos últimos campos preservan la trazabilidad distribuida extremo a extremo originada en Productions (nulos en eventos históricos). El campo `details` es una **cadena con JSON serializado** del payload Kafka, no un objeto JSON anidado. Consultas de solo lectura para Admin y Auditor.
 
 - Filtros opcionales `actor` y `type` por igualdad exacta y combinados con AND; `from`/`to` inclusivos.
 - `timestamp`, `from` y `to`: fecha-hora ISO local **sin offset**, cuyo valor se interpreta como **UTC** por convenio interno. La conversión a la zona del navegador corresponde al frontend. No cambiar el formato sin coordinar BFF/Angular.
@@ -26,7 +26,7 @@ Consultar [CONTRACTS.md](CONTRACTS.md) para la versión precisa de REST y Kafka.
 
 ## Kafka
 
-El contrato v1 consumido por el PR #4 utiliza `KafkaEventEnvelope` con `schemaVersion=1.0`, UUID `eventId`, tipo `ProductionCreated` / `ProductionStatusChanged`, timestamps UTC (`Instant`), `actor` y `payload`. Audit registra los eventos una sola vez mediante `processed_event` y la restricción única `audit_event.event_id`.
+El contrato v1 consumido por el PR #4 utiliza `KafkaEventEnvelope` con `schemaVersion=1.0`, UUID `eventId`, tipo `ProductionCreated` / `ProductionStatusChanged`, timestamps UTC (`Instant`), `actor`, `traceId`, `correlationId` y `payload`. Audit registra los eventos una sola vez mediante `processed_event` y la restricción única `audit_event.event_id`, persistiendo la trazabilidad distribuida en `audit_event`.
 
 **No** habilitar `AUDIT_KAFKA_ENABLED=true` hasta validar el publicador real de Productions (EMX-92), la identidad del `actor`, tópicos de retry/DLT, seguridad de brokers y conectividad de la topología final. Las pruebas de Testcontainers usan ejemplos de mensajes, no un despliegue conjunto entre servicios.
 
@@ -37,7 +37,7 @@ El **Caso EventoMax también enumera el tópico `audit.timeline`**; este servici
 1. Completar las variables no secretas y privadas a partir de `.env.example` **sin versionar `.env`**. El Compose de desarrollo publica Audit en `127.0.0.1:8084` y PostgreSQL en `127.0.0.1:5435`.
 2. Ejecutar `docker compose up -d --build`. Sin la activación expresa de Kafka, el listener no arranca; las consultas devuelven únicamente registros reales presentes en la base.
 3. Ejecutar `./mvnw -B -ntp clean verify` (PowerShell: `.\mvnw.cmd -B -ntp clean verify`). Requiere Docker para Testcontainers Kafka/PostgreSQL.
-4. Smoke test: construir `docker build -t eventomax-audit:smoke .` y ejecutar `pwsh ./scripts/Smoke-Local.ps1 -Image eventomax-audit:smoke`. Crea y elimina recursos temporales; valida health, 401, usuario no-root y Flyway V1–V3.
+4. Smoke test: construir `docker build -t eventomax-audit:smoke .` y ejecutar `pwsh ./scripts/Smoke-Local.ps1 -Image eventomax-audit:smoke`. Crea y elimina recursos temporales; valida health, 401, usuario no-root y Flyway V1–V4.
 
 El workflow de GitHub Actions ejecuta Maven, Docker build, smoke test y conserva reportes Surefire. La ejecución del PR #4 sobre el commit `9976768` aprobó 28 pruebas; **cualquier commit posterior requiere nuevo CI**. Las pruebas usan datos y firmas efímeras únicamente dentro de `src/test`.
 
