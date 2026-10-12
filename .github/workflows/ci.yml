@@ -1,7 +1,7 @@
 name: Audit verification
 on:
   pull_request:
-    branches: [develop, main, fix/EMX-69-production-readiness]
+    branches: [develop, main]
   push:
     branches: [develop]
 permissions:

@@ -1,94 +1,48 @@
-# EventoMax Audit — EMX-69
+# EventoMax — ms-eventomax-audit (EMX-69)
 
-Java 25 / Spring Boot 4.1.1. API de lectura sobre PostgreSQL, alimentada por Kafka.
-Flujo obligatorio: Angular → Entra ID → API Gateway → BFF → Audit.
+> Estado: candidato de integración. No existe todavía evidencia de despliegue AWS ni de una ejecución extremo a extremo con el productor real. El consumidor Kafka inicia deshabilitado.
 
-## Estado de integración
+Servicio Java 25 / Spring Boot 4.1.1. Recibe eventos de producciones desde Kafka, conserva un timeline idempotente en PostgreSQL y publica una **API REST de solo lectura**. La persistencia usa Flyway; no hay mocks ni datos de prueba en el runtime.
 
-Esta corrección endurece Audit, pero **no cierra EMX-69**:
-- EMX-71 debe aprobar el contrato real de `productions.events`.
-- EMX-72 debe incorporar routing BFF y validar propagación del Bearer.
-- AWS, Entra real y demo E2E todavía requieren evidencia.
-- El DTO Kafka sigue siendo provisional: `AUDIT_KAFKA_ENABLED=false` por defecto.
-  Las pruebas de transporte usan un tópico aislado y no acreditan compatibilidad con Productions.
+## Arquitectura y responsabilidades
 
-## API
+- Consulta protegida: Angular/MSAL → Entra ID → API Gateway (JWT/CORS) → BFF → Audit → PostgreSQL.
+- Ingesta asíncrona: Productions (Transactional Outbox) → Kafka `productions.events` → Audit → PostgreSQL. La ingesta **no** pasa por API Gateway.
+- Audit exige JWT firmado, issuer/audience, `SCOPE_access_as_user` y rol `Admin` o `Auditor`; solo `GET /api/audit/timeline` está autorizado. `/actuator/health` se expone sin JWT **solo en la red privada**.
+- La infraestructura aprobada prevé AWS EC2 + Docker, PostgreSQL en Amazon RDS y Kafka en EC2. No se asume MSK ni Aurora.
+
+## REST
 
 `GET /api/audit/timeline?actor=...&type=...&from=...&to=...&page=0&size=50`
 
-Respuesta: array JSON, conservando la forma anterior. Filtros exactos actor/type, combinados
-con AND; fechas inclusivas. Orden por timestamp descendente y luego ID descendente.
-page >= 0; size entre 1 y 200. Sin parámetros: primera página de 50.
-Rango invertido, fecha inválida y paginación inválida responden 400.
-El contrato temporal usa fecha ISO local sin offset; la normalización UTC se acordará en EMX-71.
-Ver CONTRACTS.md.
+Devuelve un **array JSON** de objetos `eventId`, `actor`, `type`, `timestamp` y `details`. El último campo es una **cadena con JSON serializado** del payload Kafka, no un objeto JSON anidado. Consultas de solo lectura para Admin y Auditor.
 
-## Seguridad
+- Filtros opcionales `actor` y `type` por igualdad exacta y combinados con AND; `from`/`to` inclusivos.
+- `timestamp`, `from` y `to`: fecha-hora ISO local **sin offset**, cuyo valor se interpreta como **UTC** por convenio interno. La conversión a la zona del navegador corresponde al frontend. No cambiar el formato sin coordinar BFF/Angular.
+- Paginación: `page=0`, `size=50` por defecto; `page >= 0` y `1 <= size <= 200`. Orden descendente por `timestamp` y `id`. Página vacía: `[]`; no incluye total de páginas.
+- Respuestas esperadas: 200 con array; 400 con parámetros inválidos; 401 sin JWT válido; 403 cuando falta rol/scope o se intenta escritura.
 
-JWT firmado por el issuer aprobado, audiencia correcta, exp obligatorio, scope
-`access_as_user` y rol `Admin` o `Auditor`. Solo lectura.
-Health es accesible sin JWT en la red interna; el resto de rutas no aprobadas se deniega.
-Swagger/OpenAPI requiere los mismos permisos. Nunca exponer Audit directamente en Internet.
-Ver TRUST_BOUNDARY.md.
+Consultar [CONTRACTS.md](CONTRACTS.md) para la versión precisa de REST y Kafka.
 
-## Configuración y ejecución
+## Kafka
 
-Copiar `.env.example` a `.env` y completar DB_USER, DB_PASSWORD, ENTRA_ISSUER_URI y
-ENTRA_AUDIENCE con valores aprobados. No versionar credenciales.
-`docker compose up -d --build` levanta PostgreSQL y Audit local.
-Los puertos de desarrollo solo se enlazan a 127.0.0.1: API 8084 y PostgreSQL 5435.
-En Docker, localhost no identifica el host ni otro contenedor. Ajustar
-KAFKA_BOOTSTRAP_SERVERS y los advertised listeners del broker cuando corresponda.
+El contrato v1 consumido por el PR #4 utiliza `KafkaEventEnvelope` con `schemaVersion=1.0`, UUID `eventId`, tipo `ProductionCreated` / `ProductionStatusChanged`, timestamps UTC (`Instant`), `actor` y `payload`. Audit registra los eventos una sola vez mediante `processed_event` y la restricción única `audit_event.event_id`.
 
-Producción: `docker compose -f docker-compose.prod.yml up -d --build`, únicamente
-con autorización de despliegue. Requiere DB_URL y red externa eventomax-net.
-El Compose productivo no publica puertos. La red compartida no garantiza por sí sola
-que únicamente el BFF pueda conectar.
+**No** habilitar `AUDIT_KAFKA_ENABLED=true` hasta validar el publicador real de Productions (EMX-92), la identidad del `actor`, tópicos de retry/DLT, seguridad de brokers y conectividad de la topología final. Las pruebas de Testcontainers usan ejemplos de mensajes, no un despliegue conjunto entre servicios.
 
-## Persistencia y migraciones
+El **Caso EventoMax también enumera el tópico `audit.timeline`**; este servicio no lo publica actualmente. La decisión de implementarlo o documentar una excepción debe cerrarse con el equipo y la pauta vigente. No declarar cumplida esa parte del caso por tener el endpoint REST. Ver [CONTRACTS.md](CONTRACTS.md).
 
-Flyway habilitado y Hibernate `ddl-auto=validate`.
-V1 permanece intacta; V2 agrega UNIQUE a audit_event.event_id.
-Antes de aplicar V2 en una base existente, comprobar:
-```sql
-SELECT event_id, count(*) FROM audit_event GROUP BY event_id HAVING count(*) > 1;
-```
-Si hay duplicados, resolver su conservación con el equipo antes de migrar. La migración
-falla sin borrar información; no hace limpieza automática.
-Una inserción `ON CONFLICT DO NOTHING` reclama eventId en processed_event. La reserva
-y el timeline pertenecen a la misma transacción; un fallo revierte ambos.
+## Desarrollo y pruebas
 
-## Kafka provisional: solo habilitar tras cerrar EMX-71
+1. Completar las variables no secretas y privadas a partir de `.env.example` **sin versionar `.env`**. El Compose de desarrollo publica Audit en `127.0.0.1:8084` y PostgreSQL en `127.0.0.1:5435`.
+2. Ejecutar `docker compose up -d --build`. Sin la activación expresa de Kafka, el listener no arranca; las consultas devuelven únicamente registros reales presentes en la base.
+3. Ejecutar `./mvnw -B -ntp clean verify` (PowerShell: `.\mvnw.cmd -B -ntp clean verify`). Requiere Docker para Testcontainers Kafka/PostgreSQL.
+4. Smoke test: construir `docker build -t eventomax-audit:smoke .` y ejecutar `pwsh ./scripts/Smoke-Local.ps1 -Image eventomax-audit:smoke`. Crea y elimina recursos temporales; valida health, 401, usuario no-root y Flyway V1–V3.
 
-Se incluye el starter Kafka de Spring Boot 4 para registrar realmente los listeners.
-JSON sin cabeceras de clase se interpreta con el DTO local; se ignoran los tipos remotos.
-ErrorHandlingDeserializer conserva bytes ilegibles para DLT.
-Retry utiliza serialización JSON/byte[] y tres intentos totales (inicial + dos reintentos).
-Sufijos exclusivos de Audit: `-audit-retry`, `-audit-dlt`.
-La autocreación de tópicos está desactivada en producción. Infraestructura debe
-provisionar principal, retry y DLT con particiones compatibles antes de habilitar el listener.
-Confirmar nombres efectivos con la versión de Spring Kafka usada y la configuración final.
+El workflow de GitHub Actions ejecuta Maven, Docker build, smoke test y conserva reportes Surefire. La ejecución del PR #4 sobre el commit `9976768` aprobó 28 pruebas; **cualquier commit posterior requiere nuevo CI**. Las pruebas usan datos y firmas efímeras únicamente dentro de `src/test`.
 
-El consumidor automático DLT permanece detenido para no avanzar offsets sin intervención.
-Revisar con un grupo de inspección separado, registrar tópico/partición/offset y causa,
-corregir el problema y acordar un replay manteniendo eventId. No borrar DLT ni reiniciar
-offsets productivos automáticamente. Retención y monitoreo deben acordarse con infraestructura.
+## Preparación cloud
 
-## Pruebas reproducibles
+Usar [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) como checklist y runbook. La aplicación solo podrá declararse **desplegada y demostrada** tras validar red privada, Amazon RDS, Kafka EC2, Entra ID real, BFF, API Gateway y Angular, con datos originados realmente en Productions.
 
-Requisitos: Java 25, Docker operativo y acceso inicial a Maven Central/Docker Hub.
-```sh
-./mvnw -B -ntp verify
-```
-Windows: `.\\mvnw.cmd -B -ntp verify`.
-PostgreSQL 17 efímero por Testcontainers, Flyway real y Kafka embebido.
-Se prueban concurrencia, rollback, filtros, JWT firmado con claves efímeras,
-reintentos, DLT y JSON inválido. Ninguna prueba requiere credenciales cloud.
-Reportes: target/surefire-reports.
-CI ejecuta verify, construye Docker y ejecuta scripts/Smoke-Local.ps1; conserva reportes.
-Para repetir el smoke local, construir la imagen eventomax-audit:emx69-review y ejecutar
-`pwsh ./scripts/Smoke-Local.ps1`. Usa una red y PostgreSQL efímeros; los elimina al terminar.
-Dockerfile omite pruebas porque Docker-in-Docker no está disponible en la etapa de build:
-la prueba es un gate previo obligatorio, no una garantía del build de imagen por sí solo.
-
-Matriz y evidencia: docs/EMX-69-correcciones.md.
+Registro de seguridad: [TRUST_BOUNDARY.md](TRUST_BOUNDARY.md). Evidencia histórica del endurecimiento inicial: [docs/EMX-69-correcciones.md](docs/EMX-69-correcciones.md).
