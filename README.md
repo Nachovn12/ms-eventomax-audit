@@ -10,7 +10,7 @@
 
 `ms-eventomax-audit` es el servicio responsable de registrar de forma inmutable e idempotente la bitácora forense de eventos de dominio de **EventoMax EP2**. Escucha el tópico `productions.events` en **Apache Kafka**, persiste la huella completa del sobre (`eventId`, `type`, `timestamp`, `traceId`, `correlationId`, `actor`, `productionId`, `payload`) en PostgreSQL y expone el endpoint paginado `/api/audit/timeline` para los roles `Admin` y `Auditor`.
 
-En despliegues AWS EC2 donde Kafka se mantiene apagado para preservar memoria de la instancia `t3.large`, `ms-eventomax-audit` inicia limpiamente con `AUDIT_KAFKA_ENABLED=false` y sirve `GET /api/audit/timeline` directamente desde su esquema PostgreSQL (`audit`).
+En despliegues AWS EC2 donde Kafka se mantiene apagado para preservar memoria de la instancia `t3.large`, `ms-eventomax-audit` inicia limpiamente con `AUDIT_KAFKA_ENABLED=false` y sirve `GET /api/audit/timeline` directamente desde su esquema PostgreSQL (`audit`), retornando `200 OK` con lista vacía (`[]`) cuando aún no se han proyectado eventos desde Kafka (y mostrando en el frontend el aviso explícito *"No hay eventos para los filtros seleccionados en esta página"*, sin datos simulados).
 
 ---
 
