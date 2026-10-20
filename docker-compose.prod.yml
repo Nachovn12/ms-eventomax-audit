@@ -3,18 +3,23 @@ services:
     build:
       context: .
     container_name: eventomax-audit-prod
+    expose:
+      - "8080"
     restart: always
     environment:
       DB_URL: ${DB_URL}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
-      AUDIT_KAFKA_ENABLED: ${AUDIT_KAFKA_ENABLED:-false}
+      AUDIT_KAFKA_ENABLED: ${AUDIT_KAFKA_ENABLED:-true}
       ENTRA_ISSUER_URI: ${ENTRA_ISSUER_URI:?Set the approved Entra issuer URI}
       ENTRA_AUDIENCE: ${ENTRA_AUDIENCE:?Set the approved API audience}
       SPRING_PROFILES_ACTIVE: prod
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:InitialRAMPercentage=25.0 -XX:MaxRAMPercentage=65.0 -XX:+ExitOnOutOfMemoryError}
     networks:
-      - eventomax-net
+      eventomax-net:
+        aliases:
+          - ms-eventomax-audit
 
 networks:
   eventomax-net:

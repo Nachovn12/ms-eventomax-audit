@@ -73,25 +73,93 @@ class AuditKafkaTests {
 
     static final RSAKey KEY = newKey();
 
+    private static void assertEphemeralContainersIsolatedBeforeContext() {
+        if (!POSTGRES.isRunning() || !KAFKA.isRunning()) {
+            throw new IllegalStateException("Testcontainers PostgreSQL y Kafka deben estar activos antes de iniciar el contexto Spring de Audit.");
+        }
+        String ephemeralBootstrap = KAFKA.getBootstrapServers();
+        if (ephemeralBootstrap == null || ephemeralBootstrap.isBlank()
+                || ephemeralBootstrap.contains(":9092") || ephemeralBootstrap.contains(":29092")) {
+            throw new IllegalStateException("Aislamiento Kafka violado en Audit: bootstrap-servers inválido o apunta al puerto persistente 9092: " + ephemeralBootstrap);
+        }
+        String jdbcUrl = POSTGRES.getJdbcUrl();
+        if (jdbcUrl == null || jdbcUrl.isBlank()
+                || jdbcUrl.contains(":5432/") || jdbcUrl.contains(":5433/")
+                || jdbcUrl.contains(":5434/") || jdbcUrl.contains(":5435/")) {
+            throw new IllegalStateException("Aislamiento PostgreSQL violado en Audit: JDBC URL apunta a un puerto de base persistente: " + jdbcUrl);
+        }
+    }
+
     @DynamicPropertySource
     static void dynamicProperties(DynamicPropertyRegistry r) {
+        assertEphemeralContainersIsolatedBeforeContext();
+
+        r.add("DB_URL", POSTGRES::getJdbcUrl);
+        r.add("DB_USER", POSTGRES::getUsername);
+        r.add("DB_PASSWORD", POSTGRES::getPassword);
         r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         r.add("spring.datasource.username", POSTGRES::getUsername);
         r.add("spring.datasource.password", POSTGRES::getPassword);
+        r.add("spring.datasource.driver-class-name", POSTGRES::getDriverClassName);
+
+        r.add("KAFKA_BOOTSTRAP_SERVERS", KAFKA::getBootstrapServers);
         r.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        r.add("spring.kafka.consumer.bootstrap-servers", KAFKA::getBootstrapServers);
+        r.add("spring.kafka.producer.bootstrap-servers", KAFKA::getBootstrapServers);
+        r.add("spring.kafka.admin.bootstrap-servers", KAFKA::getBootstrapServers);
+
         r.add("ENTRA_ISSUER_URI", () -> "https://issuer.invalid/test");
         r.add("ENTRA_AUDIENCE", () -> "audit-test");
     }
 
     @Autowired JdbcTemplate jdbc;
     @Autowired WebApplicationContext context;
+    @Autowired org.springframework.core.env.Environment environment;
+    @Autowired org.springframework.kafka.core.ConsumerFactory<?, ?> consumerFactory;
+    @Autowired org.springframework.kafka.core.KafkaTemplate<String, Object> auditRetryKafkaTemplate;
     MockMvc mvc;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
     void setup() {
+        verifyEffectiveKafkaAndDatabaseIsolation();
         jdbc.execute("TRUNCATE audit_event, processed_event RESTART IDENTITY");
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+    }
+
+    private void verifyEffectiveKafkaAndDatabaseIsolation() {
+        assertEphemeralContainersIsolatedBeforeContext();
+        String expectedBootstrap = KAFKA.getBootstrapServers();
+
+        assertThat(environment.getProperty("spring.kafka.bootstrap-servers"))
+                .isEqualTo(expectedBootstrap)
+                .doesNotContain(":9092");
+        assertThat(environment.getProperty("spring.kafka.consumer.bootstrap-servers"))
+                .isEqualTo(expectedBootstrap)
+                .doesNotContain(":9092");
+        assertThat(environment.getProperty("spring.kafka.producer.bootstrap-servers"))
+                .isEqualTo(expectedBootstrap)
+                .doesNotContain(":9092");
+        assertThat(environment.getProperty("spring.kafka.admin.bootstrap-servers"))
+                .isEqualTo(expectedBootstrap)
+                .doesNotContain(":9092");
+        assertThat(environment.getProperty("eventomax.audit.kafka.topic"))
+                .isEqualTo("productions.events.test");
+
+        Object retryProducerBootstrap = auditRetryKafkaTemplate.getProducerFactory()
+                .getConfigurationProperties()
+                .get(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG);
+        Object consumerBootstrap = consumerFactory
+                .getConfigurationProperties()
+                .get(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG);
+
+        assertThat(String.valueOf(retryProducerBootstrap)).contains(expectedBootstrap).doesNotContain(":9092");
+        assertThat(String.valueOf(consumerBootstrap)).contains(expectedBootstrap).doesNotContain(":9092");
+        assertThat(environment.getProperty("spring.datasource.url"))
+                .isEqualTo(POSTGRES.getJdbcUrl())
+                .doesNotContain(":5432/")
+                .doesNotContain(":5433/")
+                .doesNotContain(":5435/");
     }
 
     // Real EMX-92 ProductionCreated JSON
@@ -467,6 +535,7 @@ class AuditKafkaTests {
     }
 
     private void assertDlt(String payload, boolean raw) throws Exception {
+        verifyEffectiveKafkaAndDatabaseIsolation();
         Map<String,Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "inspect-" + UUID.randomUUID());
@@ -501,6 +570,7 @@ class AuditKafkaTests {
     }
 
     private void send(String json) throws Exception {
+        verifyEffectiveKafkaAndDatabaseIsolation();
         var props = Map.<String,Object>of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
                 ProducerConfig.ACKS_CONFIG, "all");
@@ -534,6 +604,7 @@ class AuditKafkaTests {
     }
 
     private void verifyNotInDlt(List<String> eventIds) {
+        verifyEffectiveKafkaAndDatabaseIsolation();
         Map<String,Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "verify-no-dlt-" + UUID.randomUUID());
