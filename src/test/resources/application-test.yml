@@ -1,0 +1,16 @@
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://issuer.invalid/test
+eventomax:
+  security:
+    jwt:
+      audience: audit-test
+logging:
+  level:
+    org.apache.kafka: WARN
+    kafka: WARN
+    state.change.logger: WARN
+    org.springframework.kafka: WARN
