@@ -10,6 +10,8 @@
 
 `ms-eventomax-audit` es el servicio responsable de registrar de forma inmutable e idempotente la bitácora forense de eventos de dominio de **EventoMax EP2**. Escucha el tópico `productions.events` en **Apache Kafka**, persiste la huella completa del sobre (`eventId`, `type`, `timestamp`, `traceId`, `correlationId`, `actor`, `productionId`, `payload`) en PostgreSQL y expone el endpoint paginado `/api/audit/timeline` para los roles `Admin` y `Auditor`.
 
+En despliegues AWS EC2 donde Kafka se mantiene apagado para preservar memoria de la instancia `t3.large`, `ms-eventomax-audit` inicia limpiamente con `AUDIT_KAFKA_ENABLED=false` y sirve `GET /api/audit/timeline` directamente desde su esquema PostgreSQL (`audit`), retornando `200 OK` con lista vacía (`[]`) cuando aún no se han proyectado eventos desde Kafka (y mostrando en el frontend el aviso explícito *"No hay eventos para los filtros seleccionados en esta página"*, sin datos simulados).
+
 ---
 
 ## 2. Arquitectura del Módulo y Diagrama
@@ -25,30 +27,7 @@ flowchart LR
 
 ---
 
-## 3. Stack Tecnológico y Versiones Reales (`pom.xml`)
-
-| Componente | Tecnología / Dependencia | Versión |
-|---|---|---|
-| Lenguaje | Java (Eclipse Temurin) | `25` |
-| Framework Base | Spring Boot (`spring-boot-starter-parent`) | `4.1.1` |
-| Mensajería de Eventos | `spring-kafka` | Boot `4.1.1` |
-| Persistencia | Spring Data JPA + PostgreSQL + Flyway (`V1`, `V2`) | Boot `4.1.1` |
-| Seguridad | `spring-boot-starter-security` + `oauth2-resource-server` | Boot `4.1.1` |
-| Testing | JUnit 5, Testcontainers (`2.0.5`, PostgreSQL + Kafka), MockMvc | Boot `4.1.1` |
-
----
-
-## 4. Cumplimiento de Rúbrica EP2 (Matriz Caso 8)
-
-| Criterio de Evaluación EP2 | Implementación en `ms-eventomax-audit` | Estado |
-|---|---|---|
-| **Trazabilidad Distribuida y Forense** | Almacenamiento íntegro de `traceId`, `correlationId`, `eventId`, `actor` y `payload` JSON original para cada transición de estado y contratación de servicios. | **CUMPLIDO** |
-| **Idempotencia y Resiliencia Kafka** | Deduplicación en tabla `processed_event` y derivación de mensajes corruptos hacia `productions.events.audit.DLT`. | **CUMPLIDO** |
-| **Seguridad JWT Microsoft Entra ID** | Validación estricta de `issuer`, `audience`, scope `access_as_user` y roles `Admin` / `Auditor`. | **CUMPLIDO** |
-
----
-
-## 5. Endpoints Expuestos
+## 3. Endpoints Expuestos
 
 | Método | Ruta | Roles Autorizados | Descripción |
 |---|---|---|---|
@@ -57,52 +36,25 @@ flowchart LR
 
 ---
 
-## 6. Base de Datos y Migraciones Flyway
-
-| Versión | Archivo | Descripción |
-|---|---|---|
-| `V1` | `V1__init_audit_schema.sql` | Crea tablas `audit_event` e índices de búsqueda por `production_id`, `event_type` y `occurred_at`. |
-| `V2` | `V2__create_processed_event.sql` | Crea tabla `processed_event` para control de idempotencia del consumidor Kafka. |
-
----
-
-## 7. Variables de Entorno Requeridas
+## 4. Variables de Entorno Requeridas (`.env.prod.example`)
 
 | Variable | Ejemplo Placeholder | Descripción |
 |---|---|---|
-| `DB_URL` | `jdbc:postgresql://localhost:5435/eventomax_audit` | URL JDBC PostgreSQL |
-| `DB_USER` | `audit_user` | Usuario PostgreSQL |
+| `DB_URL` | `jdbc:postgresql://<POSTGRES_HOST>:5432/eventomax?currentSchema=audit` | URL JDBC PostgreSQL |
+| `DB_USER` | `eventomax_prod` | Usuario PostgreSQL |
 | `DB_PASSWORD` | `<SECRET_DB_PASSWORD>` | Contraseña PostgreSQL |
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Brokers Apache Kafka |
-| `AUDIT_KAFKA_ENABLED` | `true` | Activa el consumidor Kafka en despliegue productivo |
-| `AUDIT_KAFKA_TOPIC` | `productions.events` | Tópico Kafka de eventos de dominio |
-| `AUDIT_KAFKA_GROUP_ID` | `audit-group` | Consumer group de Audit |
+| `AUDIT_KAFKA_ENABLED` | `false` (en EC2 sin Kafka) o `true` (con Kafka activo) | Controla la activación del consumidor Kafka |
 | `ENTRA_ISSUER_URI` | `https://login.microsoftonline.com/<TENANT_ID>/v2.0` | Issuer URI de Microsoft Entra ID |
 | `ENTRA_AUDIENCE` | `api://a1a87bcd-fed7-4d65-83c3-338389b80093` | Audience del API en Entra ID |
 
 ---
 
-## 8. Ejecución Local y Pruebas Automatizadas
+## 5. Ejecución de Pruebas Automatizadas y Despliegue Docker
 
 ```bash
-# Ejecutar suite completa de pruebas unitarias e integración con Testcontainers efímeros (32 tests)
-mvn clean test
+mvn clean verify
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
-**Resultado certificado en EP2:** `Tests run: 32, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS`.
-
----
-
-## 9. Construcción y Despliegue Docker
-
-```bash
-docker build -t ms-eventomax-audit:ep2 .
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
----
-
-## 10. Estado Actual de Certificación EP2 y Trazabilidad Jira
-
-- **Pruebas Automatizadas:** `32/32` aprobadas (`AuditKafkaTests`, `AuditSecurityAndTimelineTests`, `AuditApplicationTests`, `SwaggerProdTest`).
-- **Historias Jira:** `EMX-70` / `EMX-91` (Consumidor Kafka de Auditoría y endpoint `/api/audit/timeline`).
+**Resultado certificado en EP2:** `Tests run: 32, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS`. Presupuesto de memoria: `mem_limit: 512m`.
