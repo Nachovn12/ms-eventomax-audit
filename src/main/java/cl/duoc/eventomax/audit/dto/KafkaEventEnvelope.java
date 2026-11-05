@@ -1,5 +1,7 @@
 package cl.duoc.eventomax.audit.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -13,6 +15,7 @@ public class KafkaEventEnvelope {
     private String traceId;
     private String correlationId;
     private String actor;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String source;
     private Map<String, Object> payload;
 
