@@ -13,6 +13,7 @@ public class KafkaEventEnvelope {
     private String traceId;
     private String correlationId;
     private String actor;
+    private String source;
     private Map<String, Object> payload;
 
     public KafkaEventEnvelope() {}
@@ -49,6 +50,9 @@ public class KafkaEventEnvelope {
 
     public String getActor() { return actor; }
     public void setActor(String actor) { this.actor = actor; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
 
     public Map<String, Object> getPayload() { return payload; }
     public void setPayload(Map<String, Object> payload) { this.payload = payload; }
