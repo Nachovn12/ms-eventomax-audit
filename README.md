@@ -1,12 +1,12 @@
 <a href="https://7dewsdyt7i.execute-api.us-east-1.amazonaws.com/kafka-ui/">
-  <img src="docs/assets/eventomax-audit-banner.svg" alt="EventoMax — Auditoría Forense" width="100%" />
+  <img src="docs/assets/eventomax-audit-banner.svg" alt="EventoMax — Auditoría y Trazabilidad" width="100%" />
 </a>
 
 > **Caso de Estudio 8:** Plataforma B2B de Producción y Montaje de Eventos &nbsp;|&nbsp; **Asignatura:** Desarrollo Cloud Native (`DSY1107`) &nbsp;|&nbsp; **Equipo:** Ignacio Valeria, Benjamín Flores, Benjamín Espinoza
 
 ## Propósito del Repositorio
 
-`ms-eventomax-audit` mantiene la bitácora forense e inmutable de eventos de dominio de **EventoMax** y expone la línea de tiempo operativa para los roles `Admin` y `Auditor`:
+`ms-eventomax-audit` mantiene la bitácora inmutable de auditoría de eventos de dominio de **EventoMax** y expone la línea de tiempo operativa para los roles `Admin` y `Auditor`:
 
 - **Consumo Resiliente con Retry y DLT (`ProductionEventConsumer`):** Escucha `productions.events` (`group-id: audit-group`) bajo `@RetryableTopic` (3 intentos con tópicos `productions.events-audit-retry` y `productions.events-audit-dlt`), valida estrictamente el sobre (`schemaVersion=1.0`, `eventId`, `type`, `timestamp`, `actor`, `payload`) y persiste de forma idempotente en PostgreSQL preservando `traceId`, `correlationId` y `source`.
 - **Streaming Bidireccional en `audit.timeline`:** Cada evento auditado válido se republica particionado por `productionId` hacia el tópico compactado `audit.timeline` y es consumido en tiempo real por `TimelineEventConsumer` (`audit-timeline-group`).
@@ -23,7 +23,7 @@
 
 | Método | Ruta | Roles Autorizados (vía BFF) | Descripción |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/audit/timeline?actor=&from=&to=&type=&page=0&size=50` | `Admin`, `Auditor` | Línea de tiempo paginada (`size` `1..200`) de eventos forenses registrados |
+| `GET` | `/api/audit/timeline?actor=&from=&to=&type=&page=0&size=50` | `Admin`, `Auditor` | Línea de tiempo paginada (`size` `1..200`) de eventos de auditoría registrados |
 | `GET` | `/actuator/health`, `/actuator/info` | Interno | Sondeo de salud del contenedor |
 
 ## Base de Datos y Migraciones Flyway (`V1..V5`)

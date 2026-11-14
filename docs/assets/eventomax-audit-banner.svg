@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="1200" height="220" role="img" aria-label="EventoMax - Auditoría Forense">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="1200" height="220" role="img" aria-label="EventoMax - Auditoría y Trazabilidad">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#021330"/>
@@ -20,7 +20,7 @@
 
   <text x="216" y="96" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="44" font-weight="700" letter-spacing="-0.6" fill="#ffffff">
     EventoMax
-    <tspan font-size="24" font-weight="400" fill="#93c5fd" dx="12">Auditoría Forense</tspan>
+    <tspan font-size="24" font-weight="400" fill="#93c5fd" dx="12">Auditoría y Trazabilidad</tspan>
   </text>
 
   <text x="216" y="134" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#cbd5e1">
