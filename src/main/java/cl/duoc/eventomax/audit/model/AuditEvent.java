@@ -37,6 +37,9 @@ public class AuditEvent {
     @Column(name = "correlation_id")
     private String correlationId;
 
+    @Column(name = "source")
+    private String source;
+
     public AuditEvent() {
     }
 
@@ -102,5 +105,13 @@ public class AuditEvent {
 
     public void setCorrelationId(String correlationId) {
         this.correlationId = correlationId;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 }

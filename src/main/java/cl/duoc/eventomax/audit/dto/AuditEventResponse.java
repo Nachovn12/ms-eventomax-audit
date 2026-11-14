@@ -10,16 +10,22 @@ public class AuditEventResponse {
     private String details;
     private String traceId;
     private String correlationId;
+    private String source;
 
     public AuditEventResponse() {
     }
 
     public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details) {
-        this(eventId, actor, type, timestamp, details, null, null);
+        this(eventId, actor, type, timestamp, details, null, null, null);
     }
 
     public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details,
                               String traceId, String correlationId) {
+        this(eventId, actor, type, timestamp, details, traceId, correlationId, null);
+    }
+
+    public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details,
+                              String traceId, String correlationId, String source) {
         this.eventId = eventId;
         this.actor = actor;
         this.type = type;
@@ -27,6 +33,7 @@ public class AuditEventResponse {
         this.details = details;
         this.traceId = traceId;
         this.correlationId = correlationId;
+        this.source = source;
     }
 
     public String getEventId() { return eventId; }
@@ -36,4 +43,5 @@ public class AuditEventResponse {
     public String getDetails() { return details; }
     public String getTraceId() { return traceId; }
     public String getCorrelationId() { return correlationId; }
+    public String getSource() { return source; }
 }

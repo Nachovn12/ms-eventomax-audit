@@ -30,6 +30,12 @@ public class ProductionEventConsumer {
     private final AuditService auditService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @org.springframework.beans.factory.annotation.Value("${eventomax.audit.kafka.topic.timeline:audit.timeline}")
+    private String timelineTopic;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
+
     public ProductionEventConsumer(AuditService auditService) {
         this.auditService = auditService;
     }
@@ -56,6 +62,7 @@ public class ProductionEventConsumer {
         event.setType(envelope.getType());
         event.setTraceId(envelope.getTraceId());
         event.setCorrelationId(envelope.getCorrelationId());
+        event.setSource(envelope.getSource() != null ? envelope.getSource() : "productions-core");
 
         // Convert Instant (UTC) explicitly to LocalDateTime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE column
         LocalDateTime eventTimestamp = LocalDateTime.ofInstant(envelope.getTimestamp(), ZoneOffset.UTC);
@@ -69,6 +76,18 @@ public class ProductionEventConsumer {
         }
 
         auditService.processEvent(event);
+
+        if (kafkaTemplate != null) {
+            try {
+                String aggregateKey = envelope.getPayload() != null && envelope.getPayload().containsKey("productionId")
+                        ? String.valueOf(envelope.getPayload().get("productionId"))
+                        : envelope.getEventId().toString();
+                kafkaTemplate.send(timelineTopic, aggregateKey, envelope);
+                log.debug("Forwarded event {} to audit.timeline topic with key {}", envelope.getEventId(), aggregateKey);
+            } catch (Exception e) {
+                log.warn("Could not forward event {} to audit.timeline: {}", envelope.getEventId(), e.getMessage());
+            }
+        }
     }
 
     private static final Set<String> VALID_PRODUCTION_STATUSES = Set.of(
