@@ -1,60 +1,104 @@
-# ms-eventomax-audit — Microservicio de Auditoría Inmutable y Línea de Tiempo vía Kafka (EP2)
+<a href="https://7dewsdyt7i.execute-api.us-east-1.amazonaws.com/kafka-ui/">
+  <img src="docs/assets/eventomax-audit-banner.svg" alt="EventoMax — Auditoría Forense" width="100%" />
+</a>
 
-**Asignatura:** Desarrollo Cloud Native I (`DSY1107`)
-**Caso de Estudio:** Caso 8 — Plataforma de Producción y Montaje de Eventos (**EventoMax**)
-**Equipo:** Ignacio Valeria, Benjamín Flores, Benjamín Espinoza
+> **Caso de Estudio 8:** Plataforma B2B de Producción y Montaje de Eventos &nbsp;|&nbsp; **Asignatura:** Desarrollo Cloud Native (`DSY1107`) &nbsp;|&nbsp; **Equipo:** Ignacio Valeria, Benjamín Flores, Benjamín Espinoza
 
----
+## Propósito del Repositorio
 
-## 1. Propósito del Repositorio y Rol en EventoMax
+`ms-eventomax-audit` mantiene la bitácora forense e inmutable de eventos de dominio de **EventoMax** y expone la línea de tiempo operativa para los roles `Admin` y `Auditor`:
 
-`ms-eventomax-audit` es el servicio responsable de registrar de forma inmutable e idempotente la bitácora forense de eventos de dominio de **EventoMax EP2**. Escucha el tópico `productions.events` en **Apache Kafka**, persiste la huella completa del sobre (`eventId`, `type`, `timestamp`, `traceId`, `correlationId`, `actor`, `productionId`, `payload`) en PostgreSQL y expone el endpoint paginado `/api/audit/timeline` para los roles `Admin` y `Auditor`.
+- **Consumo Resiliente con Retry y DLT (`ProductionEventConsumer`):** Escucha `productions.events` (`group-id: audit-group`) bajo `@RetryableTopic` (3 intentos con tópicos `productions.events-audit-retry` y `productions.events-audit-dlt`), valida estrictamente el sobre (`schemaVersion=1.0`, `eventId`, `type`, `timestamp`, `actor`, `payload`) y persiste de forma idempotente en PostgreSQL preservando `traceId`, `correlationId` y `source`.
+- **Streaming Bidireccional en `audit.timeline`:** Cada evento auditado válido se republica particionado por `productionId` hacia el tópico compactado `audit.timeline` y es consumido en tiempo real por `TimelineEventConsumer` (`audit-timeline-group`).
+- **Consulta Cronológica Paginada:** Expone `GET /api/audit/timeline` con filtros por `actor`, `type` y rango horario ISO (`from` / `to`), protegiendo el servicio ante consultas fuera de rango (`InvalidDateRangeException`).
 
-En despliegues AWS EC2 donde Kafka se mantiene apagado para preservar memoria de la instancia `t3.large`, `ms-eventomax-audit` inicia limpiamente con `AUDIT_KAFKA_ENABLED=false` y sirve `GET /api/audit/timeline` directamente desde su esquema PostgreSQL (`audit`), retornando `200 OK` con lista vacía (`[]`) cuando aún no se han proyectado eventos desde Kafka (y mostrando en el frontend el aviso explícito *"No hay eventos para los filtros seleccionados en esta página"*, sin datos simulados).
+## Accesos Relacionados (Demo AWS)
 
----
+| Recurso | Enlace HTTPS | Acceso |
+| :--- | :--- | :--- |
+| **Apache Kafka UI** | [Abrir Kafka UI](https://7dewsdyt7i.execute-api.us-east-1.amazonaws.com/kafka-ui/) | Sin login (ver `productions.events`, `audit.timeline` y `*-audit-dlt`) |
+| **Swagger UI (Tag `Auditoría`)** | [Abrir Swagger UI](https://7dewsdyt7i.execute-api.us-east-1.amazonaws.com/swagger-ui/index.html) | Lectura pública · `Bearer <JWT>` roles `Admin`, `Auditor` |
 
-## 2. Arquitectura del Módulo y Diagrama
+## Endpoints Expuestos (`expose 8080`)
+
+| Método | Ruta | Roles Autorizados (vía BFF) | Descripción |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/audit/timeline?actor=&from=&to=&type=&page=0&size=50` | `Admin`, `Auditor` | Línea de tiempo paginada (`size` `1..200`) de eventos forenses registrados |
+| `GET` | `/actuator/health`, `/actuator/info` | Interno | Sondeo de salud del contenedor |
+
+## Base de Datos y Migraciones Flyway (`V1..V5`)
+
+| Versión | Script | Evolución del Esquema |
+| :--- | :--- | :--- |
+| `V1` | `V1__init_audit_schema.sql` | Crea `processed_event` y `audit_event` con índices en `actor`, `type`, `event_timestamp` |
+| `V2` | `V2__unique_audit_event.sql` | Restricción de unicidad sobre `event_id` en `audit_event` |
+| `V3` | `V3__audit_timeline_index.sql` | Índice compuesto `idx_audit_event_timestamp_id` descendente |
+| `V4` | `V4__add_trace_and_correlation_id_to_audit_event.sql` | Añade columnas `trace_id` y `correlation_id` |
+| `V5` | `V5__add_source_to_audit_event.sql` | Añade columna `source` para origen del evento |
+
+## Stack Tecnológico
+
+<table>
+  <tr>
+    <td align="center" width="20%">
+      <img src="docs/assets/tech/spring-boot.svg" width="36" height="36" alt="Spring Boot" /><br />
+      <strong>Java 25 · Boot 4.1.1</strong>
+    </td>
+    <td align="center" width="20%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tech/apache-kafka-dark.svg" />
+        <img src="docs/assets/tech/apache-kafka.svg" width="36" height="36" alt="Apache Kafka" />
+      </picture><br />
+      <strong>Kafka Streaming + DLT</strong>
+    </td>
+    <td align="center" width="20%">
+      <img src="docs/assets/tech/postgresql.svg" width="36" height="36" alt="PostgreSQL" /><br />
+      <strong>PostgreSQL · Flyway</strong>
+    </td>
+    <td align="center" width="20%">
+      <img src="docs/assets/tech/microsoft.svg" width="36" height="36" alt="Microsoft Entra ID" /><br />
+      <strong>Entra ID OAuth2</strong>
+    </td>
+    <td align="center" width="20%">
+      <img src="docs/assets/tech/docker.svg" width="36" height="36" alt="Docker" /><br />
+      <strong>Docker (512m)</strong>
+    </td>
+  </tr>
+</table>
+
+## Arquitectura del Módulo
 
 ```mermaid
-flowchart LR
-    KFK[["Apache Kafka\nTopic: productions.events"]] -->|Consumer Group: audit-group| LISTENER["AuditEventConsumer\n(ms-eventomax-audit)"]
-    LISTENER -.->|Poison Message| DLT[["Topic DLT:\nproductions.events.audit.DLT"]]
-    LISTENER --> PG_AUD[("PostgreSQL (Flyway V1..V2)\naudit_event\nprocessed_event")]
-    BFF["ms-eventomax-bff"] -->|GET /api/audit/timeline| CTRL["AuditController"]
-    CTRL --> PG_AUD
+flowchart TB
+    KFK_IN[["Apache Kafka<br/>productions.events (audit-group)"]] --> PROD_C
+    RETRY[["*-audit-retry · *-audit-dlt"]]
+    KFK_TL[["Apache Kafka (compactado)<br/>audit.timeline"]]
+
+    subgraph AUD["ms-eventomax-audit (:8080)"]
+        direction LR
+        PROD_C["ProductionEventConsumer<br/>(@RetryableTopic · traceId)"] --> PG[("PostgreSQL (V1..V5)<br/>audit_event · processed_event")]
+        TL_C["TimelineEventConsumer<br/>(audit-timeline-group)"]
+        CTRL["AuditController<br/>/api/audit/timeline"] --> PG
+    end
+
+    PROD_C -.->|"3 intentos fallidos"| RETRY
+    PROD_C -->|"Key: productionId"| KFK_TL --> TL_C
+    BFF["ms-eventomax-bff"] -->|"GET /api/audit/timeline"| CTRL
 ```
 
----
+## Variables de Entorno y Verificación
 
-## 3. Endpoints Expuestos
-
-| Método | Ruta | Roles Autorizados | Descripción |
-|---|---|---|---|
-| `GET` | `/api/audit/timeline?productionId=&eventType=&from=&to=&page=0&size=20` | `Admin`, `Auditor` | Consulta paginada y filtrable de la línea de tiempo de eventos de dominio registrados. |
-| `GET` | `/actuator/health`, `/actuator/info` | Público (Healthcheck interno) | Estado de salud del microservicio. |
-
----
-
-## 4. Variables de Entorno Requeridas (`.env.prod.example`)
-
-| Variable | Ejemplo Placeholder | Descripción |
-|---|---|---|
-| `DB_URL` | `jdbc:postgresql://<POSTGRES_HOST>:5432/eventomax?currentSchema=audit` | URL JDBC PostgreSQL |
-| `DB_USER` | `eventomax_prod` | Usuario PostgreSQL |
-| `DB_PASSWORD` | `<SECRET_DB_PASSWORD>` | Contraseña PostgreSQL |
-| `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Brokers Apache Kafka |
-| `AUDIT_KAFKA_ENABLED` | `false` (en EC2 sin Kafka) o `true` (con Kafka activo) | Controla la activación del consumidor Kafka |
-| `ENTRA_ISSUER_URI` | `https://login.microsoftonline.com/<TENANT_ID>/v2.0` | Issuer URI de Microsoft Entra ID |
-| `ENTRA_AUDIENCE` | `api://a1a87bcd-fed7-4d65-83c3-338389b80093` | Audience del API en Entra ID |
-
----
-
-## 5. Ejecución de Pruebas Automatizadas y Despliegue Docker
+| Variable | Ejemplo | Descripción |
+| :--- | :--- | :--- |
+| `DB_URL` / `DB_USER` / `DB_PASSWORD` | `jdbc:postgresql://<HOST>:5432/eventomax?currentSchema=audit` | Conexión PostgreSQL y esquema `audit` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `ec2-kafka:9092` | Brokers del clúster Apache Kafka |
+| `AUDIT_KAFKA_ENABLED` | `true` (con Kafka activo) / `false` (solo consulta DB) | Habilita los consumidores y el reenvío a `audit.timeline` |
+| `ENTRA_ISSUER_URI` / `ENTRA_AUDIENCE` | `https://login.microsoftonline.com/<TENANT>/v2.0` | Validación JWT Entra ID |
 
 ```bash
-mvn clean verify
+# Ejecutar suite completa con PostgreSQL Testcontainers y Embedded Kafka
+./mvnw -B -ntp verify
+
+# Despliegue Docker (mem_limit: 512m)
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
-
-**Resultado certificado en EP2:** `Tests run: 32, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS`. Presupuesto de memoria: `mem_limit: 512m`.
