@@ -110,4 +110,29 @@ public class AuditControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].source").value("web-ui"));
     }
+
+    @Test
+    public void getLatestSnapshots_Returns200AndRejectsInvalidPaging() throws Exception {
+        var snapshot = new cl.duoc.eventomax.audit.dto.ProductionTimelineSnapshotResponse(
+                "42", "event-42", "ProductionStatusChanged", "EN_MONTAJE",
+                "Festival Primavera", "prod@duocuc.cl", "ms-eventomax-productions",
+                "trace-42", "corr-42",
+                java.time.LocalDateTime.of(2026, 10, 12, 11, 0),
+                java.time.LocalDateTime.of(2026, 10, 12, 11, 0, 1),
+                "{\"productionId\":42,\"newStatus\":\"EN_MONTAJE\"}"
+        );
+        when(auditQueryService.getLatestSnapshots("42", 0, 25)).thenReturn(java.util.List.of(snapshot));
+
+        mockMvc.perform(get("/api/audit/timeline/latest")
+                        .param("productionId", "42")
+                        .param("page", "0")
+                        .param("size", "25"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].productionId").value("42"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].currentStatus").value("EN_MONTAJE"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].source").value("ms-eventomax-productions"));
+
+        mockMvc.perform(get("/api/audit/timeline/latest").param("size", "201"))
+                .andExpect(status().isBadRequest());
+    }
 }

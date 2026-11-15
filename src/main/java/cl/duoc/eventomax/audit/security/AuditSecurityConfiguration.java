@@ -45,7 +45,7 @@ public class AuditSecurityConfiguration {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/audit/timeline", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
+                        .requestMatchers(HttpMethod.GET, "/api/audit/timeline", "/api/audit/timeline/latest", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                         .access(AuthorizationManagers.allOf(
                                 AuthorityAuthorizationManager.<RequestAuthorizationContext>hasAuthority("SCOPE_access_as_user"),
                                 AuthorityAuthorizationManager.<RequestAuthorizationContext>hasAnyRole("Admin", "Auditor")))

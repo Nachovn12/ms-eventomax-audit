@@ -1,6 +1,7 @@
 package cl.duoc.eventomax.audit.controller;
 
 import cl.duoc.eventomax.audit.dto.AuditEventResponse;
+import cl.duoc.eventomax.audit.dto.ProductionTimelineSnapshotResponse;
 import cl.duoc.eventomax.audit.exception.InvalidDateRangeException;
 import cl.duoc.eventomax.audit.service.AuditQueryService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -46,5 +47,19 @@ public class AuditController {
 
         List<AuditEventResponse> timeline = auditQueryService.getTimeline(actor, from, to, type, page, size);
         return ResponseEntity.ok(timeline);
+    }
+
+    @GetMapping("/timeline/latest")
+    @Operation(summary = "Get compacted production state snapshots", description = "Retrieves the latest state per production projected from audit.timeline")
+    public ResponseEntity<List<ProductionTimelineSnapshotResponse>> getLatestSnapshots(
+            @RequestParam(required = false) String productionId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+
+        if (page < 0 || size < 1 || size > 200) {
+            throw new IllegalArgumentException("page must be >= 0 and size between 1 and 200");
+        }
+
+        return ResponseEntity.ok(auditQueryService.getLatestSnapshots(productionId, page, size));
     }
 }
