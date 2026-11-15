@@ -56,7 +56,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "eventomax.audit.kafka.enabled=true",
         "eventomax.audit.kafka.topic=productions.events.test",
+        "eventomax.audit.kafka.timeline-topic=audit.timeline.test",
         "eventomax.audit.kafka.group-id=audit-test-group",
+        "eventomax.audit.kafka.timeline-group-id=audit-timeline-test-group",
         "eventomax.audit.kafka.auto-create-topics=true"
 })
 @ActiveProfiles("test")
@@ -123,7 +125,7 @@ class AuditKafkaTests {
     @BeforeEach
     void setup() {
         verifyEffectiveKafkaAndDatabaseIsolation();
-        jdbc.execute("TRUNCATE audit_event, processed_event RESTART IDENTITY");
+        jdbc.execute("TRUNCATE audit_event, processed_event, production_timeline_snapshot RESTART IDENTITY");
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 
@@ -531,7 +533,26 @@ class AuditKafkaTests {
                 .andExpect(jsonPath("$[0].eventId").value(eventId))
                 .andExpect(jsonPath("$[0].actor").value("actor-abc"))
                 .andExpect(jsonPath("$[0].type").value("ProductionCreated"))
+                .andExpect(jsonPath("$[0].source").value("ms-eventomax-productions"))
                 .andExpect(jsonPath("$[0].details").value(org.hamcrest.Matchers.containsString("Test JSON and Order")));
+
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            Integer snapshots = jdbc.queryForObject(
+                    "SELECT count(*) FROM production_timeline_snapshot WHERE production_id = '1'",
+                    Integer.class
+            );
+            assertThat(snapshots).isEqualTo(1);
+        });
+
+        mvc.perform(get("/api/audit/timeline/latest")
+                        .header("Authorization", "Bearer " + jwt)
+                        .param("productionId", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].productionId").value("1"))
+                .andExpect(jsonPath("$[0].lastEventId").value(eventId))
+                .andExpect(jsonPath("$[0].currentStatus").value("SOLICITADO"))
+                .andExpect(jsonPath("$[0].source").value("ms-eventomax-productions"));
     }
 
     private void assertDlt(String payload, boolean raw) throws Exception {

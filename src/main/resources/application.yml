@@ -44,10 +44,12 @@ eventomax:
       audience: ${ENTRA_AUDIENCE}
   audit:
     kafka:
-      # Kafka consumer for productions.events (EMX-91 contract); disabled by default until explicit activation
+      # Kafka consumer for productions.events and audit.timeline (disabled in isolated local/PG tests)
       enabled: ${AUDIT_KAFKA_ENABLED:false}
       topic: ${AUDIT_KAFKA_TOPIC:productions.events}
+      timeline-topic: ${AUDIT_KAFKA_TIMELINE_TOPIC:audit.timeline}
       group-id: ${AUDIT_KAFKA_GROUP_ID:audit-group}
+      timeline-group-id: ${AUDIT_KAFKA_TIMELINE_GROUP_ID:audit-timeline-group}
       auto-create-topics: false
 
 management:

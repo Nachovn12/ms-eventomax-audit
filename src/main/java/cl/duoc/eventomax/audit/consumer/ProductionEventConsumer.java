@@ -30,7 +30,7 @@ public class ProductionEventConsumer {
     private final AuditService auditService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @org.springframework.beans.factory.annotation.Value("${eventomax.audit.kafka.topic.timeline:audit.timeline}")
+    @org.springframework.beans.factory.annotation.Value("${eventomax.audit.kafka.timeline-topic:${eventomax.audit.kafka.topic.timeline:audit.timeline}}")
     private String timelineTopic;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -57,12 +57,17 @@ public class ProductionEventConsumer {
         log.debug("Received audit event id {} type {} from topic {}", envelope.getEventId(), envelope.getType(), topic);
 
         AuditEvent event = new AuditEvent();
+        String effectiveSource = (envelope.getSource() != null && !envelope.getSource().isBlank())
+                ? envelope.getSource()
+                : "ms-eventomax-productions";
+        envelope.setSource(effectiveSource);
+
         event.setEventId(envelope.getEventId().toString());
         event.setActor(envelope.getActor());
         event.setType(envelope.getType());
         event.setTraceId(envelope.getTraceId());
         event.setCorrelationId(envelope.getCorrelationId());
-        event.setSource(envelope.getSource() != null ? envelope.getSource() : "productions-core");
+        event.setSource(effectiveSource);
 
         // Convert Instant (UTC) explicitly to LocalDateTime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE column
         LocalDateTime eventTimestamp = LocalDateTime.ofInstant(envelope.getTimestamp(), ZoneOffset.UTC);
