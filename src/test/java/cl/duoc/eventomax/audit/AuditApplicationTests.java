@@ -61,7 +61,7 @@ class AuditApplicationTests {
 
     @BeforeEach
     void setup() {
-        jdbc.execute("TRUNCATE audit_event, processed_event RESTART IDENTITY");
+        jdbc.execute("TRUNCATE audit_event, processed_event, production_timeline_snapshot RESTART IDENTITY");
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 
@@ -153,6 +153,61 @@ class AuditApplicationTests {
     void healthIsPublicAndProvisionalConsumerIsDisabled() throws Exception {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk());
         assertThat(context.getBeansOfType(cl.duoc.eventomax.audit.consumer.ProductionEventConsumer.class)).isEmpty();
+    }
+
+    @Test
+    void flywayV7MigratesActorDisplayNameAndSnapshotDoesNotInheritStaleDisplayName() throws Exception {
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM flyway_schema_history WHERE success AND version = '7'",
+                Integer.class)).isEqualTo(1);
+
+        var namedEvent = event("evt-named", "tid:oid-1", "ProductionCreated", LocalDateTime.of(2026, 11, 21, 10, 0));
+        namedEvent.setActorDisplayName("Ignacio Valeria");
+        service.processEvent(namedEvent);
+
+        var historicalEvent = event("evt-legacy", "sub-legacy-999", "ProductionStatusChanged", LocalDateTime.of(2026, 11, 21, 9, 0));
+        service.processEvent(historicalEvent);
+
+        var jwt = token("Auditor", "access_as_user", "audit-test", "https://issuer.invalid/test", Instant.now().plusSeconds(300));
+        // Exact technical actor filter remains unchanged (does not match by display name)
+        mvc.perform(get("/api/audit/timeline").header("Authorization", "Bearer " + jwt).param("actor", "tid:oid-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].actor").value("tid:oid-1"))
+                .andExpect(jsonPath("$[0].actorDisplayName").value("Ignacio Valeria"));
+
+        mvc.perform(get("/api/audit/timeline").header("Authorization", "Bearer " + jwt).param("actor", "Ignacio Valeria"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        mvc.perform(get("/api/audit/timeline").header("Authorization", "Bearer " + jwt).param("actor", "sub-legacy-999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].actorDisplayName").value((Object) null));
+
+        // Snapshot projection: event 1 with display name, event 2 from different actor without display name
+        var env1 = new cl.duoc.eventomax.audit.dto.KafkaEventEnvelope(
+                "1.0", UUID.randomUUID(), "ProductionCreated",
+                Instant.parse("2026-11-21T10:00:00Z"), "tr-1", "cr-1", "tid:oid-1",
+                Map.of("productionId", 99, "productionName", "Gala", "status", "SOLICITADO"));
+        env1.setActorDisplayName("Ignacio Valeria");
+        service.projectTimelineSnapshot(env1, "99");
+
+        mvc.perform(get("/api/audit/timeline/latest").header("Authorization", "Bearer " + jwt).param("productionId", "99"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].actor").value("tid:oid-1"))
+                .andExpect(jsonPath("$[0].actorDisplayName").value("Ignacio Valeria"));
+
+        var env2 = new cl.duoc.eventomax.audit.dto.KafkaEventEnvelope(
+                "1.0", UUID.randomUUID(), "ProductionStatusChanged",
+                Instant.parse("2026-11-21T10:05:00Z"), "tr-2", "cr-2", "system",
+                Map.of("productionId", 99, "productionName", "Gala", "newStatus", "CONFIRMADO"));
+        service.projectTimelineSnapshot(env2, "99");
+
+        mvc.perform(get("/api/audit/timeline/latest").header("Authorization", "Bearer " + jwt).param("productionId", "99"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].actor").value("system"))
+                .andExpect(jsonPath("$[0].actorDisplayName").value((Object) null));
     }
 
     static AuditEvent event(String id, String actor, String type, LocalDateTime time) {

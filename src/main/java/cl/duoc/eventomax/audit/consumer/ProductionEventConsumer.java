@@ -60,10 +60,13 @@ public class ProductionEventConsumer {
         String effectiveSource = (envelope.getSource() != null && !envelope.getSource().isBlank())
                 ? envelope.getSource()
                 : "ms-eventomax-productions";
+        String effectiveActorDisplayName = AuditService.normalizeActorDisplayName(envelope.getActorDisplayName());
         envelope.setSource(effectiveSource);
+        envelope.setActorDisplayName(effectiveActorDisplayName);
 
         event.setEventId(envelope.getEventId().toString());
         event.setActor(envelope.getActor());
+        event.setActorDisplayName(effectiveActorDisplayName);
         event.setType(envelope.getType());
         event.setTraceId(envelope.getTraceId());
         event.setCorrelationId(envelope.getCorrelationId());

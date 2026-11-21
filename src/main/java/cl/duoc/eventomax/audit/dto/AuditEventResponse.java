@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 public class AuditEventResponse {
     private String eventId;
     private String actor;
+    private String actorDisplayName;
     private String type;
     private LocalDateTime timestamp;
     private String details;
@@ -16,18 +17,24 @@ public class AuditEventResponse {
     }
 
     public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details) {
-        this(eventId, actor, type, timestamp, details, null, null, null);
+        this(eventId, actor, type, timestamp, details, null, null, null, null);
     }
 
     public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details,
                               String traceId, String correlationId) {
-        this(eventId, actor, type, timestamp, details, traceId, correlationId, null);
+        this(eventId, actor, type, timestamp, details, traceId, correlationId, null, null);
     }
 
     public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details,
                               String traceId, String correlationId, String source) {
+        this(eventId, actor, type, timestamp, details, traceId, correlationId, source, null);
+    }
+
+    public AuditEventResponse(String eventId, String actor, String type, LocalDateTime timestamp, String details,
+                              String traceId, String correlationId, String source, String actorDisplayName) {
         this.eventId = eventId;
         this.actor = actor;
+        this.actorDisplayName = actorDisplayName;
         this.type = type;
         this.timestamp = timestamp;
         this.details = details;
@@ -38,6 +45,7 @@ public class AuditEventResponse {
 
     public String getEventId() { return eventId; }
     public String getActor() { return actor; }
+    public String getActorDisplayName() { return actorDisplayName; }
     public String getType() { return type; }
     public LocalDateTime getTimestamp() { return timestamp; }
     public String getDetails() { return details; }

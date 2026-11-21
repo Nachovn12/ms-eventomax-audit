@@ -22,6 +22,9 @@ public class AuditEvent {
     @Column(nullable = false)
     private String actor;
 
+    @Column(name = "actor_display_name", length = 150)
+    private String actorDisplayName;
+
     @Column(nullable = false)
     private String type;
 
@@ -65,6 +68,14 @@ public class AuditEvent {
 
     public void setActor(String actor) {
         this.actor = actor;
+    }
+
+    public String getActorDisplayName() {
+        return actorDisplayName;
+    }
+
+    public void setActorDisplayName(String actorDisplayName) {
+        this.actorDisplayName = actorDisplayName;
     }
 
     public String getType() {

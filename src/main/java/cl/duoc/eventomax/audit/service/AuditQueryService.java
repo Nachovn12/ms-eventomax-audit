@@ -70,7 +70,8 @@ public class AuditQueryService {
                         event.getDetails(),
                         event.getTraceId(),
                         event.getCorrelationId(),
-                        event.getSource()
+                        event.getSource(),
+                        event.getActorDisplayName()
                 ))
                 .collect(Collectors.toList());
     }
@@ -87,7 +88,7 @@ public class AuditQueryService {
         String sql = filterProduction
                 ? """
                   SELECT production_id, last_event_id, last_event_type, current_status,
-                         production_name, actor, source, trace_id, correlation_id,
+                         production_name, actor, actor_display_name, source, trace_id, correlation_id,
                          last_occurred_at, updated_at, details
                   FROM production_timeline_snapshot
                   WHERE production_id = ?
@@ -96,7 +97,7 @@ public class AuditQueryService {
                   """
                 : """
                   SELECT production_id, last_event_id, last_event_type, current_status,
-                         production_name, actor, source, trace_id, correlation_id,
+                         production_name, actor, actor_display_name, source, trace_id, correlation_id,
                          last_occurred_at, updated_at, details
                   FROM production_timeline_snapshot
                   ORDER BY last_occurred_at DESC
@@ -114,6 +115,7 @@ public class AuditQueryService {
                 rs.getString("current_status"),
                 rs.getString("production_name"),
                 rs.getString("actor"),
+                rs.getString("actor_display_name"),
                 rs.getString("source"),
                 rs.getString("trace_id"),
                 rs.getString("correlation_id"),
