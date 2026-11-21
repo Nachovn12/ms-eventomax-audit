@@ -25,15 +25,24 @@ public class AuditQueryService {
 
     private final AuditEventRepository auditEventRepository;
     private final JdbcTemplate jdbc;
+    private final AuditActorResolutionService actorResolutionService;
 
     public AuditQueryService(AuditEventRepository auditEventRepository) {
-        this(auditEventRepository, null);
+        this(auditEventRepository, null, null);
+    }
+
+    public AuditQueryService(AuditEventRepository auditEventRepository, JdbcTemplate jdbc) {
+        this(auditEventRepository, jdbc, null);
     }
 
     @Autowired
-    public AuditQueryService(AuditEventRepository auditEventRepository, JdbcTemplate jdbc) {
+    public AuditQueryService(
+            AuditEventRepository auditEventRepository,
+            JdbcTemplate jdbc,
+            @Autowired(required = false) AuditActorResolutionService actorResolutionService) {
         this.auditEventRepository = auditEventRepository;
         this.jdbc = jdbc;
+        this.actorResolutionService = actorResolutionService;
     }
 
     public List<AuditEventResponse> getTimeline(String actor, LocalDateTime from, LocalDateTime to, String type,
@@ -60,19 +69,45 @@ public class AuditQueryService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
 
-        return auditEventRepository.findAll(spec,
-                        PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamp", "id"))).stream()
-                .map(event -> new AuditEventResponse(
-                        event.getEventId(),
-                        event.getActor(),
-                        event.getType(),
-                        event.getTimestamp(),
-                        event.getDetails(),
-                        event.getTraceId(),
-                        event.getCorrelationId(),
-                        event.getSource(),
-                        event.getActorDisplayName()
-                ))
+        List<AuditEvent> pageEvents = auditEventRepository.findAll(spec,
+                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamp", "id"))).getContent();
+
+        AuditActorResolutionService.ResolutionContext resolutionContext = (actorResolutionService != null)
+                ? actorResolutionService.prepareContext(pageEvents.stream()
+                        .map(e -> new AuditActorResolutionService.ActorLookupCandidate(e.getActor(), e.getActorDisplayName()))
+                        .toList())
+                : null;
+
+        return pageEvents.stream()
+                .map(event -> {
+                    if (actorResolutionService == null || resolutionContext == null) {
+                        return new AuditEventResponse(
+                                event.getEventId(),
+                                event.getActor(),
+                                event.getType(),
+                                event.getTimestamp(),
+                                event.getDetails(),
+                                event.getTraceId(),
+                                event.getCorrelationId(),
+                                event.getSource(),
+                                event.getActorDisplayName()
+                        );
+                    }
+                    var resolved = actorResolutionService.resolve(event.getActor(), event.getActorDisplayName(), resolutionContext);
+                    return new AuditEventResponse(
+                            event.getEventId(),
+                            event.getActor(),
+                            event.getType(),
+                            event.getTimestamp(),
+                            event.getDetails(),
+                            event.getTraceId(),
+                            event.getCorrelationId(),
+                            event.getSource(),
+                            resolved.displayName(),
+                            resolved.email(),
+                            resolved.source()
+                    );
+                })
                 .collect(Collectors.toList());
     }
 
@@ -108,7 +143,7 @@ public class AuditQueryService {
                 ? new Object[]{productionId.trim(), size, offset}
                 : new Object[]{size, offset};
 
-        return jdbc.query(sql, (rs, rowNum) -> new ProductionTimelineSnapshotResponse(
+        List<ProductionTimelineSnapshotResponse> rawSnapshots = jdbc.query(sql, (rs, rowNum) -> new ProductionTimelineSnapshotResponse(
                 rs.getString("production_id"),
                 rs.getString("last_event_id"),
                 rs.getString("last_event_type"),
@@ -123,6 +158,37 @@ public class AuditQueryService {
                 toLocalDateTime(rs.getTimestamp("updated_at")),
                 rs.getString("details")
         ), params);
+
+        if (actorResolutionService == null || rawSnapshots.isEmpty()) {
+            return rawSnapshots;
+        }
+
+        var resolutionContext = actorResolutionService.prepareContext(rawSnapshots.stream()
+                .map(s -> new AuditActorResolutionService.ActorLookupCandidate(s.actor(), s.actorDisplayName()))
+                .toList());
+
+        return rawSnapshots.stream()
+                .map(s -> {
+                    var resolved = actorResolutionService.resolve(s.actor(), s.actorDisplayName(), resolutionContext);
+                    return new ProductionTimelineSnapshotResponse(
+                            s.productionId(),
+                            s.lastEventId(),
+                            s.lastEventType(),
+                            s.currentStatus(),
+                            s.productionName(),
+                            s.actor(),
+                            resolved.displayName(),
+                            resolved.email(),
+                            resolved.source(),
+                            s.source(),
+                            s.traceId(),
+                            s.correlationId(),
+                            s.lastOccurredAt(),
+                            s.updatedAt(),
+                            s.details()
+                    );
+                })
+                .collect(Collectors.toList());
     }
 
     private static LocalDateTime toLocalDateTime(Timestamp timestamp) {
