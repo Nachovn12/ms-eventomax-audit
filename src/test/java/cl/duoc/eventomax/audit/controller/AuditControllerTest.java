@@ -135,4 +135,42 @@ public class AuditControllerTest {
         mockMvc.perform(get("/api/audit/timeline/latest").param("size", "201"))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    public void getTimelineAndSnapshotsExposeOptionalActorDisplayName() throws Exception {
+        var eventWithDisplayName = new cl.duoc.eventomax.audit.dto.AuditEventResponse(
+                "event-with-name", "tid:oid-1", "ProductionCreated",
+                java.time.LocalDateTime.of(2026, 11, 21, 10, 0),
+                "{\"productionId\":9}", "trace-1", "corr-1", "ms-eventomax-productions", "Ignacio Valeria"
+        );
+        var legacyEventWithoutDisplayName = new cl.duoc.eventomax.audit.dto.AuditEventResponse(
+                "event-legacy", "sub-legacy-123", "ProductionStatusChanged",
+                java.time.LocalDateTime.of(2026, 11, 21, 9, 0),
+                "{\"productionId\":9}", "trace-0", "corr-0", "ms-eventomax-productions"
+        );
+        when(auditQueryService.getTimeline(any(), any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(java.util.List.of(eventWithDisplayName, legacyEventWithoutDisplayName));
+
+        mockMvc.perform(get("/api/audit/timeline"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].actor").value("tid:oid-1"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].actorDisplayName").value("Ignacio Valeria"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[1].actor").value("sub-legacy-123"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[1].actorDisplayName").value((Object) null));
+
+        var snapshotWithDisplayName = new cl.duoc.eventomax.audit.dto.ProductionTimelineSnapshotResponse(
+                "9", "event-with-name", "ProductionCreated", "SOLICITADO",
+                "Evento Demo", "tid:oid-1", "Ignacio Valeria", "ms-eventomax-productions",
+                "trace-1", "corr-1",
+                java.time.LocalDateTime.of(2026, 11, 21, 10, 0),
+                java.time.LocalDateTime.of(2026, 11, 21, 10, 0, 1),
+                "{\"productionId\":9}"
+        );
+        when(auditQueryService.getLatestSnapshots("9", 0, 50)).thenReturn(java.util.List.of(snapshotWithDisplayName));
+
+        mockMvc.perform(get("/api/audit/timeline/latest").param("productionId", "9"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].actor").value("tid:oid-1"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$[0].actorDisplayName").value("Ignacio Valeria"));
+    }
 }

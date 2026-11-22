@@ -13,6 +13,12 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(ActorAliasConflictException.class)
+    public ResponseEntity<Map<String, String>> handleActorAliasConflict(ActorAliasConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("error", "Conflict", "message", ex.getMessage()));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleInvalidArgument(IllegalArgumentException ex) {
         return ResponseEntity.badRequest().body(Map.of("error", "Bad Request", "message", ex.getMessage()));

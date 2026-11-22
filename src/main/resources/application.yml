@@ -42,6 +42,17 @@ eventomax:
   security:
     jwt:
       audience: ${ENTRA_AUDIENCE}
+  graph:
+    enabled: ${EVENTOMAX_GRAPH_ENABLED:false}
+    tenant-id: ${EVENTOMAX_GRAPH_TENANT_ID:}
+    client-id: ${EVENTOMAX_GRAPH_CLIENT_ID:}
+    client-secret: ${EVENTOMAX_GRAPH_CLIENT_SECRET:}
+    token-base-url: ${EVENTOMAX_GRAPH_TOKEN_BASE_URL:https://login.microsoftonline.com}
+    graph-base-url: ${EVENTOMAX_GRAPH_BASE_URL:https://graph.microsoft.com/v1.0}
+    cache-ttl: ${EVENTOMAX_GRAPH_CACHE_TTL:10m}
+    not-found-cache-ttl: ${EVENTOMAX_GRAPH_NOT_FOUND_CACHE_TTL:2m}
+    connect-timeout: ${EVENTOMAX_GRAPH_CONNECT_TIMEOUT:3s}
+    read-timeout: ${EVENTOMAX_GRAPH_READ_TIMEOUT:5s}
   audit:
     kafka:
       # Kafka consumer for productions.events and audit.timeline (disabled in isolated local/PG tests)

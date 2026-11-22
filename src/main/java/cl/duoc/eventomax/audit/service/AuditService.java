@@ -67,6 +67,7 @@ public class AuditService {
         }
         String productionName = extractText(payload, "productionName");
         String actor = hasText(envelope.getActor()) ? envelope.getActor() : "system";
+        String actorDisplayName = normalizeActorDisplayName(envelope.getActorDisplayName());
         String source = hasText(envelope.getSource()) ? envelope.getSource() : DEFAULT_SOURCE;
         LocalDateTime occurredAt = LocalDateTime.ofInstant(envelope.getTimestamp(), ZoneOffset.UTC);
         LocalDateTime now = LocalDateTime.now(Clock.systemUTC());
@@ -83,15 +84,16 @@ public class AuditService {
         jdbc.update("""
                 INSERT INTO production_timeline_snapshot (
                     production_id, last_event_id, last_event_type, current_status,
-                    production_name, actor, source, trace_id, correlation_id,
+                    production_name, actor, actor_display_name, source, trace_id, correlation_id,
                     last_occurred_at, updated_at, details
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (production_id) DO UPDATE SET
                     last_event_id = EXCLUDED.last_event_id,
                     last_event_type = EXCLUDED.last_event_type,
                     current_status = COALESCE(EXCLUDED.current_status, production_timeline_snapshot.current_status),
                     production_name = COALESCE(EXCLUDED.production_name, production_timeline_snapshot.production_name),
                     actor = EXCLUDED.actor,
+                    actor_display_name = EXCLUDED.actor_display_name,
                     source = COALESCE(EXCLUDED.source, production_timeline_snapshot.source),
                     trace_id = COALESCE(EXCLUDED.trace_id, production_timeline_snapshot.trace_id),
                     correlation_id = COALESCE(EXCLUDED.correlation_id, production_timeline_snapshot.correlation_id),
@@ -106,6 +108,7 @@ public class AuditService {
                 currentStatus,
                 productionName,
                 actor,
+                actorDisplayName,
                 source,
                 envelope.getTraceId(),
                 envelope.getCorrelationId(),
@@ -129,6 +132,17 @@ public class AuditService {
         }
         String text = String.valueOf(payload.get(key)).trim();
         return text.isEmpty() ? null : text;
+    }
+
+    public static String normalizeActorDisplayName(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        return trimmed.length() > 150 ? trimmed.substring(0, 150) : trimmed;
     }
 
     private static boolean hasText(String value) {

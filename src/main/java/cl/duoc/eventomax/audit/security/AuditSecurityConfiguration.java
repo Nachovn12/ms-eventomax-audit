@@ -35,7 +35,9 @@ public class AuditSecurityConfiguration {
             Collection<GrantedAuthority> authorities = new ArrayList<>(scopes.convert(jwt));
             Object roles = jwt.getClaims().get("roles");
             if (roles instanceof Collection<?> values) {
-                values.stream().filter(r -> "Admin".equals(r) || "Auditor".equals(r))
+                values.stream()
+                        .filter(r -> "Admin".equals(r) || "Productor".equals(r)
+                                || "Organizador".equals(r) || "Auditor".equals(r))
                         .forEach(r -> authorities.add(new SimpleGrantedAuthority("ROLE_" + r)));
             }
             return authorities;
@@ -45,6 +47,10 @@ public class AuditSecurityConfiguration {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/audit/actor-aliases/me")
+                        .access(AuthorizationManagers.allOf(
+                                AuthorityAuthorizationManager.<RequestAuthorizationContext>hasAuthority("SCOPE_access_as_user"),
+                                AuthorityAuthorizationManager.<RequestAuthorizationContext>hasAnyRole("Admin", "Productor", "Organizador", "Auditor")))
                         .requestMatchers(HttpMethod.GET, "/api/audit/timeline", "/api/audit/timeline/latest", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                         .access(AuthorizationManagers.allOf(
                                 AuthorityAuthorizationManager.<RequestAuthorizationContext>hasAuthority("SCOPE_access_as_user"),

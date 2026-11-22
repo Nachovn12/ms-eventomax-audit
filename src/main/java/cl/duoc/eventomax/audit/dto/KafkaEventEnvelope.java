@@ -1,11 +1,13 @@
 package cl.duoc.eventomax.audit.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class KafkaEventEnvelope {
 
     private String schemaVersion;
@@ -15,6 +17,8 @@ public class KafkaEventEnvelope {
     private String traceId;
     private String correlationId;
     private String actor;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String actorDisplayName;
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String source;
     private Map<String, Object> payload;
@@ -53,6 +57,9 @@ public class KafkaEventEnvelope {
 
     public String getActor() { return actor; }
     public void setActor(String actor) { this.actor = actor; }
+
+    public String getActorDisplayName() { return actorDisplayName; }
+    public void setActorDisplayName(String actorDisplayName) { this.actorDisplayName = actorDisplayName; }
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }

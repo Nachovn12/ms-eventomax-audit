@@ -91,4 +91,87 @@ class TimelineAndConsumerUnitTest {
         verify(kafkaTemplate).send(eq("audit.timeline"), eq("88"), forwardedCaptor.capture());
         assertThat(forwardedCaptor.getValue().getSource()).isEqualTo("ms-eventomax-productions");
     }
+
+    @Test
+    void productionConsumerPersistsAndForwardsNormalizedActorDisplayNameWhilePreservingActor() {
+        var consumer = new ProductionEventConsumer(auditService);
+        ReflectionTestUtils.setField(consumer, "kafkaTemplate", kafkaTemplate);
+        ReflectionTestUtils.setField(consumer, "timelineTopic", "audit.timeline");
+
+        String canonicalActor = "f191bdc8-7926-4722-9ec0-cba663701940:c3057bf6-9e39-4fa4-b042-d3932d49ebc0";
+        var envelope = new KafkaEventEnvelope(
+                "1.0",
+                UUID.randomUUID(),
+                "ProductionCreated",
+                Instant.parse("2026-11-21T15:00:00Z"),
+                "trace-10",
+                "corr-10",
+                canonicalActor,
+                Map.of(
+                        "productionId", 90,
+                        "organizerId", canonicalActor,
+                        "productionName", "Cumbre Cloud",
+                        "status", "SOLICITADO",
+                        "scheduledAt", "2026-12-01T18:00:00",
+                        "location", "Auditorio",
+                        "occurredAt", "2026-11-21T15:00:00Z"
+                )
+        );
+        envelope.setActorDisplayName("  Ignacio Valeria Nunez  ");
+
+        consumer.consume(envelope, "productions.events");
+
+        ArgumentCaptor<AuditEvent> savedCaptor = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditService).processEvent(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getActor()).isEqualTo(canonicalActor);
+        assertThat(savedCaptor.getValue().getActorDisplayName()).isEqualTo("Ignacio Valeria Nunez");
+
+        ArgumentCaptor<KafkaEventEnvelope> forwardedCaptor = ArgumentCaptor.forClass(KafkaEventEnvelope.class);
+        verify(kafkaTemplate).send(eq("audit.timeline"), eq("90"), forwardedCaptor.capture());
+        assertThat(forwardedCaptor.getValue().getActor()).isEqualTo(canonicalActor);
+        assertThat(forwardedCaptor.getValue().getActorDisplayName()).isEqualTo("Ignacio Valeria Nunez");
+    }
+
+    @Test
+    void productionConsumerHandlesBlankOrMissingActorDisplayNameAndSystemActor() {
+        var consumer = new ProductionEventConsumer(auditService);
+        ReflectionTestUtils.setField(consumer, "kafkaTemplate", kafkaTemplate);
+        ReflectionTestUtils.setField(consumer, "timelineTopic", "audit.timeline");
+
+        var envelope = new KafkaEventEnvelope(
+                "1.0",
+                UUID.randomUUID(),
+                "ProductionStatusChanged",
+                Instant.parse("2026-11-21T15:05:00Z"),
+                "trace-11",
+                "corr-11",
+                "system",
+                Map.of(
+                        "productionId", 91,
+                        "previousStatus", "SOLICITADO",
+                        "newStatus", "CONFIRMADO",
+                        "occurredAt", "2026-11-21T15:05:00Z"
+                )
+        );
+        envelope.setActorDisplayName("   ");
+
+        consumer.consume(envelope, "productions.events");
+
+        ArgumentCaptor<AuditEvent> savedCaptor = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditService).processEvent(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getActor()).isEqualTo("system");
+        assertThat(savedCaptor.getValue().getActorDisplayName()).isNull();
+
+        ArgumentCaptor<KafkaEventEnvelope> forwardedCaptor = ArgumentCaptor.forClass(KafkaEventEnvelope.class);
+        verify(kafkaTemplate).send(eq("audit.timeline"), eq("91"), forwardedCaptor.capture());
+        assertThat(forwardedCaptor.getValue().getActorDisplayName()).isNull();
+    }
+
+    @Test
+    void normalizeActorDisplayNameTruncatesAt150Characters() {
+        String longName = "A".repeat(180);
+        assertThat(AuditService.normalizeActorDisplayName(longName)).hasSize(150);
+        assertThat(AuditService.normalizeActorDisplayName(null)).isNull();
+        assertThat(AuditService.normalizeActorDisplayName("   ")).isNull();
+    }
 }

@@ -12,6 +12,9 @@ public record ProductionTimelineSnapshotResponse(
         String currentStatus,
         String productionName,
         String actor,
+        String actorDisplayName,
+        String actorEmail,
+        ActorResolutionSource actorResolutionSource,
         String source,
         String traceId,
         String correlationId,
@@ -19,4 +22,38 @@ public record ProductionTimelineSnapshotResponse(
         LocalDateTime updatedAt,
         String details
 ) {
+    public ProductionTimelineSnapshotResponse(
+            String productionId,
+            String lastEventId,
+            String lastEventType,
+            String currentStatus,
+            String productionName,
+            String actor,
+            String source,
+            String traceId,
+            String correlationId,
+            LocalDateTime lastOccurredAt,
+            LocalDateTime updatedAt,
+            String details) {
+        this(productionId, lastEventId, lastEventType, currentStatus, productionName,
+                actor, null, null, null, source, traceId, correlationId, lastOccurredAt, updatedAt, details);
+    }
+
+    public ProductionTimelineSnapshotResponse(
+            String productionId,
+            String lastEventId,
+            String lastEventType,
+            String currentStatus,
+            String productionName,
+            String actor,
+            String actorDisplayName,
+            String source,
+            String traceId,
+            String correlationId,
+            LocalDateTime lastOccurredAt,
+            LocalDateTime updatedAt,
+            String details) {
+        this(productionId, lastEventId, lastEventType, currentStatus, productionName,
+                actor, actorDisplayName, null, null, source, traceId, correlationId, lastOccurredAt, updatedAt, details);
+    }
 }
