@@ -332,9 +332,96 @@ class AuditKafkaTests {
     }
 
     @Test
-    void flywayAppliedAllMigrationsThroughV4() {
+    void flywayAppliedAllMigrationsThroughV7() {
         List<String> versions = jdbc.queryForList("SELECT version FROM flyway_schema_history ORDER BY installed_rank", String.class);
-        assertThat(versions).contains("1", "2", "3", "4");
+        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7");
+    }
+
+    @Test
+    void consumesActorDisplayNameViaKafkaAndClearsOnActorSwitchWithoutDisplayName() throws Exception {
+        String createdEventId = UUID.randomUUID().toString();
+        String canonicalActor = "f191bdc8-7926-4722-9ec0-cba663701940:c3057bf6-9e39-4fa4-b042-d3932d49ebc0";
+        String createdJson = """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "%s",
+              "type": "ProductionCreated",
+              "timestamp": "2026-11-21T12:00:00Z",
+              "traceId": "trace-actor-1",
+              "correlationId": "corr-actor-1",
+              "actor": "%s",
+              "actorDisplayName": "Ignacio Valeria Nunez",
+              "payload": {
+                "productionId": 77,
+                "organizerId": "%s",
+                "productionName": "Evento Actor Display",
+                "status": "SOLICITADO",
+                "scheduledAt": "2026-12-01T18:00:00",
+                "location": "Centro Cultural",
+                "occurredAt": "2026-11-21T12:00:00Z"
+              }
+            }
+            """.formatted(createdEventId, canonicalActor, canonicalActor).strip();
+
+        send(createdJson);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(createdEventId)).isEqualTo(1));
+
+        String jwt = token("Auditor", "access_as_user", "audit-test", "https://issuer.invalid/test", Instant.now().plusSeconds(300));
+        mvc.perform(get("/api/audit/timeline")
+                        .header("Authorization", "Bearer " + jwt)
+                        .param("actor", canonicalActor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventId").value(createdEventId))
+                .andExpect(jsonPath("$[0].actor").value(canonicalActor))
+                .andExpect(jsonPath("$[0].actorDisplayName").value("Ignacio Valeria Nunez"));
+
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            Map<String, Object> snap = jdbc.queryForMap(
+                    "SELECT actor, actor_display_name FROM production_timeline_snapshot WHERE production_id = '77'");
+            assertThat(snap.get("actor")).isEqualTo(canonicalActor);
+            assertThat(snap.get("actor_display_name")).isEqualTo("Ignacio Valeria Nunez");
+        });
+
+        // Second event for same production by a different actor WITHOUT actorDisplayName
+        String statusEventId = UUID.randomUUID().toString();
+        String statusJson = """
+            {
+              "schemaVersion": "1.0",
+              "eventId": "%s",
+              "type": "ProductionStatusChanged",
+              "timestamp": "2026-11-21T12:05:00Z",
+              "traceId": "trace-actor-2",
+              "correlationId": "corr-actor-2",
+              "actor": "sqdd0RRocgoh8Vpb8bmF2B7ad03kqIPhbn_Fs07K9ds",
+              "payload": {
+                "productionId": 77,
+                "organizerId": "%s",
+                "productionName": "Evento Actor Display",
+                "previousStatus": "SOLICITADO",
+                "newStatus": "CONFIRMADO",
+                "scheduledAt": "2026-12-01T18:00:00",
+                "location": "Centro Cultural",
+                "occurredAt": "2026-11-21T12:05:00Z"
+              }
+            }
+            """.formatted(statusEventId, canonicalActor).strip();
+
+        send(statusJson);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(count(statusEventId)).isEqualTo(1));
+
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            Map<String, Object> snap = jdbc.queryForMap(
+                    "SELECT actor, actor_display_name FROM production_timeline_snapshot WHERE production_id = '77'");
+            assertThat(snap.get("actor")).isEqualTo("sqdd0RRocgoh8Vpb8bmF2B7ad03kqIPhbn_Fs07K9ds");
+            assertThat(snap.get("actor_display_name")).isNull();
+        });
+
+        mvc.perform(get("/api/audit/timeline/latest")
+                        .header("Authorization", "Bearer " + jwt)
+                        .param("productionId", "77"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].actor").value("sqdd0RRocgoh8Vpb8bmF2B7ad03kqIPhbn_Fs07K9ds"))
+                .andExpect(jsonPath("$[0].actorDisplayName").value((Object) null));
     }
 
     @Test
